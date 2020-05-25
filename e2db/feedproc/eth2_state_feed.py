@@ -272,9 +272,10 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
 async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     prev_state: spec.BeaconState
     state: spec.BeaconState
-    block: spec.SignedBeaconBlock
+    block: Optional[spec.SignedBeaconBlock]
     async for (prev_state, post_state, block) in recv:
-        store_block(session, post_state, signed_block=block)
+        if block is not None:
+            store_block(session, post_state, signed_block=block)
         store_state(session, post_state)
         store_validator_diff(session, prev_state, post_state)
         session.commit()
