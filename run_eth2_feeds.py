@@ -1,4 +1,8 @@
 import trio
+
+from eth2spec.config import config_util
+config_util.config['GENESIS_FORK_VERSION'] = '0x00000113'
+
 from eth2.core import ContentType
 from eth2.models import lighthouse
 from eth2.providers.http import Eth2HttpClient, Eth2HttpOptions
@@ -17,7 +21,7 @@ async def run_eth2_feeds(eth2mon: Eth2Monitor, start_backfill: spec.Slot):
         # Backfill all the way up to the head. If not canonical, it will be re-orged by the watcher anyway.
         await eth2mon.backfill_cold_chain(start_backfill, head_info.slot, send)
         # After completing the back-fill, start watching for new hot blocks.
-        nursery.start_soon(eth2mon.watch_hot_chain, send)
+        # nursery.start_soon(eth2mon.watch_hot_chain, send)
         nursery.start_soon(ev_eth2_state_loop, recv)
 
 
@@ -42,5 +46,5 @@ if __name__ == '__main__':
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    trio.run(main, "ec2-18-232-73-77.compute-1.amazonaws.com")
+    trio.run(main, "http://ec2-18-232-73-77.compute-1.amazonaws.com:4000")
 

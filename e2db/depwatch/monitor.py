@@ -192,7 +192,7 @@ class DepositMonitor(object):
             await trio.sleep(poll_interval)
 
     async def backfill_blocks(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 0.1):
+                            dest: trio.MemorySendChannel, step_slowdown: float = 0.01):
         """
         Backfill eth1 blocks, for the given block range. EnhancedEth1Block are send one by one to dest.
         Optionally change the step duration.
