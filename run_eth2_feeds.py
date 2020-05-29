@@ -34,7 +34,7 @@ async def main(eth2_rpc: str):
         api = prov.extended_api(lighthouse.Eth2API)
         eth2mon = Eth2Monitor(api)
         # TODO, continue from old progress
-        start_backfill = spec.Slot(0)
+        start_backfill = spec.Slot(590)
         await run_eth2_feeds(eth2mon, start_backfill)
 
 

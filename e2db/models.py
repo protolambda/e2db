@@ -24,6 +24,16 @@ Epoch = BigInteger
 ValidatorIndex = BigInteger
 
 
+def format_epoch(epoch: int) -> int:
+    # limit to 63 bits, to fit in a signed integer.
+    # Used for validator-status epochs, which can have all bits set as special value.
+    if epoch == 0xFFFF_FFFF_FFFF_FFFF:
+        return 0x7FFF_FFFF_FFFF_FFFF
+    if epoch > 0x7FFF_FFFF_FFFF_FFFF:
+        raise Exception(f"unexpected high epoch, but not a special value {epoch}")
+    return epoch
+
+
 class CanonEth1Block(Base):
     __tablename__ = 'canon_eth1_block'
     block_num = Column(BlockNumber, primary_key=True)

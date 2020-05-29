@@ -104,11 +104,14 @@ class Eth2Monitor(object):
 
     async def backfill_cold_chain(self, from_slot: spec.Slot, to_slot: spec.Slot,
                                   dest: trio.MemorySendChannel, step_slowdown: float = 0.5):
+        genesis = False
         if from_slot == 0:
-            # TODO handle genesis case
+            genesis = True
             from_slot = 1
         api_state = await self.api.beacon.state(slot=spec.Slot(from_slot-1))
         await self.cache_state(api_state.beacon_state)
+        if genesis:
+            await dest.send((None, api_state.beacon_state, None))
         prev_state_root = api_state.root
         print(f"latest header: {api_state.beacon_state.latest_block_header}")
         for slot in range(from_slot, to_slot):

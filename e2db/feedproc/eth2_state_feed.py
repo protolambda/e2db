@@ -10,7 +10,7 @@ from e2db.models import (
     AttestationData, IndexedAttestation, PendingAttestation,
     DepositData, Deposit, DepositInclusion,
     SignedVoluntaryExit, SignedVoluntaryExitInclusion,
-    Checkpoint,
+    Checkpoint, format_epoch,
 )
 from eth2spec.phase0 import spec
 
@@ -77,6 +77,34 @@ def store_state(session: Session, state: spec.BeaconState):
     ))
 
 
+def store_validator_all(session: Session, curr_state: spec.BeaconState):
+    header = curr_state.latest_block_header.copy()
+    header.state_root = curr_state.hash_tree_root()
+    block_root = header.hash_tree_root()
+    slot = curr_state.slot
+
+    for i, v in enumerate(curr_state.validators.readonly_iter()):
+        # Create new validator
+        session.merge(Validator(
+            intro_block_root=block_root,
+            validator_index=i,
+            intro_slot=slot,
+            pubkey=v.pubkey,
+            withdrawal_credentials=v.withdrawal_credentials,
+        ))
+        # Update validator status if it's a new or changed validator
+        session.merge(ValidatorStatus(
+            intro_block_root=block_root,
+            validator_index=i,
+            intro_slot=slot,
+            effective_balance=v.effective_balance,
+            slashed=bool(v.slashed),
+            activation_eligibility_epoch=format_epoch(v.activation_eligibility_epoch),
+            activation_epoch=format_epoch(v.activation_epoch),
+            exit_epoch=format_epoch(v.exit_epoch),
+            withdrawable_epoch=format_epoch(v.withdrawable_epoch),
+        ))
+
 def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_state: spec.BeaconState):
     # TODO store balance changes
     if prev_state.validators.hash_tree_root() == curr_state.validators.hash_tree_root():
@@ -109,10 +137,10 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                 intro_slot=slot,
                 effective_balance=curr.effective_balance,
                 slashed=bool(curr.slashed),
-                activation_eligibility_epoch=curr.activation_eligibility_epoch,
-                activation_epoch=curr.activation_epoch,
-                exit_epoch=curr.exit_epoch,
-                withdrawable_epoch=curr.withdrawable_epoch,
+                activation_eligibility_epoch=format_epoch(curr.activation_eligibility_epoch),
+                activation_epoch=format_epoch(curr.activation_epoch),
+                exit_epoch=format_epoch(curr.exit_epoch),
+                withdrawable_epoch=format_epoch(curr.withdrawable_epoch),
             ))
 
 
@@ -277,5 +305,8 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
         if block is not None:
             store_block(session, post_state, signed_block=block)
         store_state(session, post_state)
-        store_validator_diff(session, prev_state, post_state)
+        if prev_state is None:
+            store_validator_all(session, post_state)
+        else:
+            store_validator_diff(session, prev_state, post_state)
         session.commit()
