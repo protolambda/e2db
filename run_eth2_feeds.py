@@ -42,5 +42,5 @@ if __name__ == '__main__':
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    trio.run(main)
+    trio.run(main, "ec2-18-232-73-77.compute-1.amazonaws.com")
 

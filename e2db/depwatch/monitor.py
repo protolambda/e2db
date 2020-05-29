@@ -143,7 +143,7 @@ class DepositMonitor(object):
                     dep_log = DepositLog.from_contract_log_dict(log)
                     print(f"parsed entry: {dep_log}")
                     parsed_batch.append(dep_log)
-                await dest.send(dep_log)
+                await dest.send(parsed_batch)
                 await trio.sleep(poll_interval)
 
     async def backfill_logs(self, from_block: BlockNumber, to_block: BlockNumber,
