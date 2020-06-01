@@ -29,12 +29,18 @@ class Eth2Monitor(object):
         if state_root not in self.state_cache_dict:
             print("FETCHING STATE")
             api_state = await self.api.beacon.state(root=state_root)
+            actual_state_root = api_state.beacon_state.hash_tree_root()
+            if actual_state_root != api_state.root:
+                print("API STATE ROOT IS BAD")
             self.state_cache_dict[spec.Root(api_state.root)] = api_state.beacon_state
-            return api_state.beacon_state
-        return self.state_cache_dict[state_root]
+            return api_state.beacon_state.copy()
+        out = self.state_cache_dict[state_root]
+        print(f"out: {out.hash_tree_root().hex()} key: {state_root.hex()}")
+        return out.copy()
 
     async def cache_state(self, state: spec.BeaconState):
         state_root = spec.Root(state.hash_tree_root())
+        print(f"caching state {state_root.hex()} (slot {state.slot})")
         self.state_cache_dict[state_root] = state.copy()
 
     async def _fetch_state_and_process_block(self, api_block: Optional[APIBlock], parent_state_root: spec.Root, dest: trio.MemorySendChannel) -> Optional[spec.BeaconState]:
@@ -46,7 +52,8 @@ class Eth2Monitor(object):
             return None
         state = pre_state.copy()
         try:
-            print(f"processing state transition of block {api_block.root} (slot {api_block.beacon_block.message.slot})")
+            print(f"processing state transition of block {api_block.root} (slot {api_block.beacon_block.message.slot}) "
+                  f"on state {state.hash_tree_root().hex()} (slot {state.slot}) (asked for {parent_state_root.hex()})")
             unchecked_state_transition(state, api_block.beacon_block)
         except Exception as e:
             print(f"WARNING: {api_block.root.hex()} (slot {api_block.beacon_block.message.slot}) failed state transition: {e}")
@@ -58,17 +65,18 @@ class Eth2Monitor(object):
             print(f"expected state root (root from API provider): {expected_state.root.hex()}")
             return None
         await self.cache_state(state)
-        await dest.send((pre_state, state, api_block.beacon_block))
+        await dest.send((pre_state, state.copy(), api_block.beacon_block))
         return state
 
     async def _fetch_state_empty_slots(self, state: spec.BeaconState, delta_slots: int, dest: trio.MemorySendChannel) -> spec.BeaconState:
+        state = state.copy()
         to_slot = state.slot + delta_slots
         for slot in range(state.slot + 1, to_slot + 1):
             pre_state = state.copy()
             print(f"processing state transition of empty slot {slot} on pre-state {pre_state.hash_tree_root().hex()})")
             spec.process_slots(state, spec.Slot(slot))
             await self.cache_state(state)
-            await dest.send((pre_state, state, None))
+            await dest.send((pre_state, state.copy(), None))
         return state
 
     async def watch_hot_chain(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0):
@@ -122,16 +130,18 @@ class Eth2Monitor(object):
                     try:
                         print(f"eth2 watcher is fetching block {node.root.hex()}")
                         block = await self.api.beacon.block(root=node.root)
+                        print(f"fetched block {block.root.hex()} (slot {block.beacon_block.message.slot}, state root {block.beacon_block.message.state_root.hex()}) for node block {node.root.hex()}")
                     except Exception as e:
                         print(f"Failed to fetch block for by root {node.root.hex()}: {e}")
-
                         await trio.sleep(poll_interval)
                         continue
 
+                    prev_state_root = parent.state_root
+                    # TODO: if gap between parent and current block, then get the correct state root
                     out_state = await self._fetch_state_and_process_block(
-                        api_block=block, parent_state_root=parent.state_root, dest=dest)
+                        api_block=block, parent_state_root=prev_state_root, dest=dest)
                     if out_state is None:
-                        print(f"state transition/fetch error! slot {node.slot}, pre-state: {parent.state_root.hex()}")
+                        print(f"state transition/fetch error! slot {node.slot}, pre-state: {prev_state_root.hex()}")
                         continue
 
                 # If the node is a start of a gap to a later unprocessed node, then process the empty slots
