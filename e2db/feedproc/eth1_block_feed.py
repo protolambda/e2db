@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 async def ev_eth1_block_loop(session: Session, recv: trio.MemoryReceiveChannel):
     ev_batch: Sequence[EnhancedEth1Block]
     async for ev in recv:
-        print(ev)
+        print(f"storing eth1 block: {ev.eth1_block.block_hash.hex()}")
         session.merge(Eth1Block(
             block_hash=ev.eth1_block.block_hash,
             parent_hash=ev.eth1_block.parent_hash,

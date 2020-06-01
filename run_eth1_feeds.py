@@ -24,20 +24,19 @@ DEPOSIT_CONTRACT_DEPLOY_BLOCK = 2758066
 # Number of blocks to start backfill, from before latest known block
 BACKFILL_REPEAT_DISTANCE = 100
 
-ETH1_RPC = "https://goerli.infura.io/v3/caf2e67f3cec4926827e5b4d17dc5167"
-# ETH1_RPC = "wss://goerli.prylabs.net/websocket"
+ETH1_RPC = "wss://goerli.infura.io/ws/v3/caf2e67f3cec4926827e5b4d17dc5167"
 
 
-async def run_eth1_feeds(session: Session, eth1mon: DepositMonitor, start_backfill: BlockNumber, start_watch: BlockNumber):
+async def run_eth1_feeds(session: Session, eth1mon: DepositMonitor, start_backfill: BlockNumber, end_backfill: BlockNumber):
     async with trio.open_nursery() as nursery:
         send, recv = trio.open_memory_channel(max_buffer_size=100)
-        nursery.start_soon(eth1mon.backfill_logs, start_backfill, start_watch, send)
-        # nursery.start_soon(eth1mon.watch_logs, start_watch, send)
+        nursery.start_soon(eth1mon.backfill_logs, start_backfill, end_backfill, send)
+        nursery.start_soon(eth1mon.watch_logs, end_backfill, send)
         nursery.start_soon(ev_deposit_batch_loop, session, recv)
 
         send, recv = trio.open_memory_channel(max_buffer_size=100)
-        nursery.start_soon(eth1mon.backfill_blocks, start_backfill, start_watch, send)
-        # nursery.start_soon(eth1mon.watch_blocks, start_watch, send)
+        nursery.start_soon(eth1mon.backfill_blocks, start_backfill, end_backfill, send)
+        nursery.start_soon(eth1mon.watch_blocks, send)
         nursery.start_soon(ev_eth1_block_loop, session, recv)
 
 
@@ -57,7 +56,7 @@ async def main(session: Session):
 
 if __name__ == '__main__':
     from sqlalchemy import create_engine
-    engine = create_engine('sqlite:///testing_eth1.db')
+    engine = create_engine('sqlite:///testing_eth1_2.db')
 
     Base.metadata.create_all(engine, checkfirst=True)
 
