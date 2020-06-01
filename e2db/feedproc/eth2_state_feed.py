@@ -2,7 +2,7 @@ import trio
 from typing import Optional
 from itertools import zip_longest
 from e2db.models import (
-    Fork, BeaconState, Validator, ValidatorStatus,
+    Fork, BeaconState, Validator, ValidatorStatus, ValidatorBalance,
     BeaconBlock, SignedBeaconBlock,
     Eth1Data, Eth1BlockVote,
     ProposerSlashing, ProposerSlashingInclusion,
@@ -63,13 +63,13 @@ def store_state(session: Session, state: spec.BeaconState):
         state_root=state_root,
         latest_block_root=header_root,
         slot=state.slot,
-        eth1_data=eth1_data_root,
+        eth1_data_root=eth1_data_root,
         fork=fork.current_version,
         validators_root=state.validators.hash_tree_root(),
         balances=state.hash_tree_root(),
         total_slashings=spec.Gwei(sum(state.slashings.readonly_iter())),
         prev_epoch_att_count=len(state.previous_epoch_attestations),
-        curr_epoch_atte_count=len(state.current_epoch_attestations),
+        curr_epoch_att_count=len(state.current_epoch_attestations),
         justification_bits=''.join('1' if state.justification_bits[i] else '0' for i in range(spec.JUSTIFICATION_BITS_LENGTH)),
         prev_just_checkpoint=prev_just_ch_root,
         curr_just_checkpoint=curr_just_ch_root,
@@ -83,7 +83,7 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
     block_root = header.hash_tree_root()
     slot = curr_state.slot
 
-    for i, v in enumerate(curr_state.validators.readonly_iter()):
+    for i, (v, b) in enumerate(zip(curr_state.validators.readonly_iter(), curr_state.balances.readonly_iter())):
         # Create new validator
         session.merge(Validator(
             intro_block_root=block_root,
@@ -104,6 +104,14 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
             exit_epoch=format_epoch(v.exit_epoch),
             withdrawable_epoch=format_epoch(v.withdrawable_epoch),
         ))
+        # And its balance
+        session.merge(ValidatorBalance(
+            intro_block_root=block_root,
+            validator_index=i,
+            intro_slot=slot,
+            balance=b,
+        ))
+
 
 def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_state: spec.BeaconState):
     # TODO store balance changes
@@ -143,6 +151,18 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                 withdrawable_epoch=format_epoch(curr.withdrawable_epoch),
             ))
 
+    prev: Optional[spec.Gwei]
+    curr: Optional[spec.Gwei]
+    for i, (prev, curr) in enumerate(zip_longest(prev_state.balances.readonly_iter(), curr_state.balances.readonly_iter())):
+        if prev is None or prev != curr:
+            # The balance may have changed
+            session.merge(ValidatorBalance(
+                intro_block_root=block_root,
+                validator_index=i,
+                intro_slot=slot,
+                balance=curr,
+            ))
+
 
 def store_block(session: Session, post_state: spec.BeaconState, signed_block: spec.SignedBeaconBlock):
     block = signed_block.message
@@ -161,7 +181,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     session.merge(Eth1BlockVote(
         beacon_block_root=block_root,
         slot=block.slot,
-        eth1_data=eth1_data_root,
+        eth1_data_root=eth1_data_root,
         proposer_index=block.proposer_index,
     ))
 

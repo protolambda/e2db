@@ -30,6 +30,6 @@ async def ev_deposit_batch_loop(session: Session, recv: trio.MemoryReceiveChanne
                 block_num=ev.block_number,
                 tx_index=ev.tx_index,
                 tx_hash=ev.tx_hash,
-                data=data_root,
+                data_root=data_root,
             ))
         session.commit()
