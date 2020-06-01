@@ -23,7 +23,7 @@ async def run_eth2_feeds(eth2mon: Eth2Monitor, start_backfill: spec.Slot):
 
         head_info = await eth2mon.api.beacon.head()
         # Backfill all the way up to the head. If not canonical, it will be re-orged by the watcher anyway.
-        # await eth2mon.backfill_cold_chain(start_backfill, head_info.slot, send)
+        await eth2mon.backfill_cold_chain(start_backfill, head_info.slot, send)
         # After completing the back-fill, start watching for new hot blocks.
         nursery.start_soon(eth2mon.watch_hot_chain, send)
 

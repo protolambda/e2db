@@ -200,7 +200,7 @@ class Eth2Monitor(object):
                 # We got the same block again, it's an empty slot.
                 pre_state = await self.get_state_by_block_and_slot(prev_block_root, spec.Slot(slot-1))
                 await self._fetch_state_empty_slots(pre_state, 1, dest)
-                print("completed filling empty slot data")
+                print(f"completed processing empty slot {slot}")
             else:
                 print(f"block {signed_block.message.hash_tree_root().hex()} state_root: {signed_block.message.state_root.hex()} parent_root: {signed_block.message.parent_root.hex()} slot: {signed_block.message.slot}")
                 ok = await self._fetch_state_and_process_block(
@@ -208,7 +208,7 @@ class Eth2Monitor(object):
                 if not ok:
                     print(f"state transition/fetch error! slot {slot}, block: {signed_block.message.hash_tree_root().hex()}")
                     continue
-                print("completed filling filled slot data")
+                print(f"completed processing filled slot {slot}")
 
             slot += 1
             print(f"new prev block root: {prev_block_root.hex()}")

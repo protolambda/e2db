@@ -114,54 +114,56 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
 
 
 def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_state: spec.BeaconState):
-    # TODO store balance changes
-    if prev_state.validators.hash_tree_root() == curr_state.validators.hash_tree_root():
-        # Nothing more to do, registry did not change
-        return
-    prev: Optional[spec.Validator]
-    curr: Optional[spec.Validator]
-
     header = curr_state.latest_block_header.copy()
     header.state_root = curr_state.hash_tree_root()
     block_root = header.hash_tree_root()
     slot = curr_state.slot
 
-    for i, (prev, curr) in enumerate(zip_longest(prev_state.validators.readonly_iter(), curr_state.validators.readonly_iter())):
-        assert curr is not None
-        if prev is None:
-            # Create new validator
-            session.merge(Validator(
-                intro_block_root=block_root,
-                validator_index=i,
-                intro_slot=slot,
-                pubkey=curr.pubkey,
-                withdrawal_credentials=curr.withdrawal_credentials,
-            ))
-        if prev is None or prev != curr:
-            # Update validator status if it's a new or changed validator
-            session.merge(ValidatorStatus(
-                intro_block_root=block_root,
-                validator_index=i,
-                intro_slot=slot,
-                effective_balance=curr.effective_balance,
-                slashed=bool(curr.slashed),
-                activation_eligibility_epoch=format_epoch(curr.activation_eligibility_epoch),
-                activation_epoch=format_epoch(curr.activation_epoch),
-                exit_epoch=format_epoch(curr.exit_epoch),
-                withdrawable_epoch=format_epoch(curr.withdrawable_epoch),
-            ))
+    if prev_state.validators.hash_tree_root() != curr_state.validators.hash_tree_root():
+        prev: Optional[spec.Validator]
+        curr: Optional[spec.Validator]
 
-    prev: Optional[spec.Gwei]
-    curr: Optional[spec.Gwei]
-    for i, (prev, curr) in enumerate(zip_longest(prev_state.balances.readonly_iter(), curr_state.balances.readonly_iter())):
-        if prev is None or prev != curr:
-            # The balance may have changed
-            session.merge(ValidatorBalance(
-                intro_block_root=block_root,
-                validator_index=i,
-                intro_slot=slot,
-                balance=curr,
-            ))
+        for i, (prev, curr) in enumerate(zip_longest(
+                prev_state.validators.readonly_iter(),
+                curr_state.validators.readonly_iter())):
+
+            assert curr is not None
+            if prev is None:
+                # Create new validator
+                session.merge(Validator(
+                    intro_block_root=block_root,
+                    validator_index=i,
+                    intro_slot=slot,
+                    pubkey=curr.pubkey,
+                    withdrawal_credentials=curr.withdrawal_credentials,
+                ))
+            if prev is None or prev != curr:
+                # Update validator status if it's a new or changed validator
+                session.merge(ValidatorStatus(
+                    intro_block_root=block_root,
+                    validator_index=i,
+                    intro_slot=slot,
+                    effective_balance=curr.effective_balance,
+                    slashed=bool(curr.slashed),
+                    activation_eligibility_epoch=format_epoch(curr.activation_eligibility_epoch),
+                    activation_epoch=format_epoch(curr.activation_epoch),
+                    exit_epoch=format_epoch(curr.exit_epoch),
+                    withdrawable_epoch=format_epoch(curr.withdrawable_epoch),
+                ))
+
+    if prev_state.balances.hash_tree_root() != curr_state.balances.hash_tree_root():
+        prev: Optional[spec.Gwei]
+        curr: Optional[spec.Gwei]
+
+        for i, (prev, curr) in enumerate(zip_longest(prev_state.balances.readonly_iter(), curr_state.balances.readonly_iter())):
+            if prev is None or prev != curr:
+                # The balance may have changed
+                session.merge(ValidatorBalance(
+                    intro_block_root=block_root,
+                    validator_index=i,
+                    intro_slot=slot,
+                    balance=curr,
+                ))
 
 
 def store_block(session: Session, post_state: spec.BeaconState, signed_block: spec.SignedBeaconBlock):
