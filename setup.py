@@ -21,7 +21,7 @@ setup(
         "linting": ["flake8"],
     },
     install_requires=[
-        "eth2>=0.0.3",
+        "eth2>=0.0.4",
         "remerkleable>=0.1.16",
         "eth2spec==0.11.3",
         "py_ecc==2.0.0",
@@ -31,6 +31,7 @@ setup(
         "eth-utils>=1.8.4",
         "web3>=5.7.0",
         "sqlalchemy>=1.3.16",
+        "psycopg2-binary>=2.8.5",
         "lru-dict==1.1.6",
     ],
     include_package_data=True,
