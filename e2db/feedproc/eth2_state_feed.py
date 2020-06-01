@@ -323,10 +323,15 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     block: Optional[spec.SignedBeaconBlock]
     async for (prev_state, post_state, block) in recv:
         if block is not None:
+            print(f"storing block {block.hash_tree_root().hex()}")
             store_block(session, post_state, signed_block=block)
+        print(f"storing post-state {post_state.hash_tree_root().hex()}")
         store_state(session, post_state)
         if prev_state is None:
+            print(f"storing full validator set of post-state {post_state.hash_tree_root().hex()}")
             store_validator_all(session, post_state)
         else:
+            print(f"storing validator diff between pre {prev_state.hash_tree_root().hex()}"
+                  f" and post {post_state.hash_tree_root().hex()}")
             store_validator_diff(session, prev_state, post_state)
         session.commit()

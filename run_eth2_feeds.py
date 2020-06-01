@@ -13,6 +13,8 @@ from e2db.eth2watch.monitor import Eth2Monitor
 from e2db.feedproc.eth2_state_feed import ev_eth2_state_loop
 from e2db.models import Base
 
+import httpx
+
 
 async def run_eth2_feeds(eth2mon: Eth2Monitor, start_backfill: spec.Slot):
     async with trio.open_nursery() as nursery:
@@ -21,16 +23,22 @@ async def run_eth2_feeds(eth2mon: Eth2Monitor, start_backfill: spec.Slot):
 
         head_info = await eth2mon.api.beacon.head()
         # Backfill all the way up to the head. If not canonical, it will be re-orged by the watcher anyway.
-        await eth2mon.backfill_cold_chain(start_backfill, head_info.slot, send)
+        # await eth2mon.backfill_cold_chain(start_backfill, head_info.slot, send)
         # After completing the back-fill, start watching for new hot blocks.
-        # nursery.start_soon(eth2mon.watch_hot_chain, send)
+        nursery.start_soon(eth2mon.watch_hot_chain, send)
 
 
 async def main(eth2_rpc: str):
+    # Temporary hack, would be better on per-function call basis.
+    # Beacon states take long to fetch, but are rarely fetched.
+    timeout = httpx.Timeout(connect_timeout=2.0,
+                            read_timeout=10.0,
+                            write_timeout=2.0,
+                            pool_timeout=3.0)
     async with Eth2HttpClient(options=Eth2HttpOptions(
             api_base_url=eth2_rpc,
             default_req_type=ContentType.json,
-            default_resp_type=ContentType.ssz)) as prov:
+            default_resp_type=ContentType.ssz, default_timeout=timeout)) as prov:
         api = prov.extended_api(lighthouse.Eth2API)
         eth2mon = Eth2Monitor(api)
         # TODO, continue from old progress
@@ -40,7 +48,7 @@ async def main(eth2_rpc: str):
 
 if __name__ == '__main__':
     from sqlalchemy import create_engine
-    engine = create_engine('sqlite:///testing.db')
+    engine = create_engine('sqlite:///testing2.db')
 
     Base.metadata.create_all(engine, checkfirst=True)
 
