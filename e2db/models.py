@@ -63,7 +63,7 @@ class Eth1BlockVote(Base):
     __tablename__ = 'eth1_block_vote'
     beacon_block_root = Column(Root, ForeignKey('beacon_block.block_root'), primary_key=True)
     slot = Column(Slot)
-    eth1_data = Column(Root, ForeignKey('eth1_data.data_root'))
+    eth1_data_root = Column(Root, ForeignKey('eth1_data.data_root'))
     proposer_index = Column(ValidatorIndex)
 
 
@@ -82,7 +82,7 @@ class DepositTx(Base):
     block_num = Column(Integer)
     tx_index = Column(Integer)
     tx_hash = Column(TxHash, primary_key=True)
-    data = Column(Root, ForeignKey('deposit_data.data_root'))
+    data_root = Column(Root, ForeignKey('deposit_data.data_root'))
 
 
 class Validator(Base):
@@ -97,7 +97,7 @@ class Validator(Base):
 
 class ValidatorStatus(Base):
     __tablename__ = 'validator_status'
-    # Intro of the new status, not necessarily the validator
+    # Intro of the new status, not necessarily the validator itself being introduced, just the new status
     intro_block_root = Column(Root, primary_key=True)
     intro_slot = Column(Slot)
     validator_index = Column(ValidatorIndex, primary_key=True)
@@ -107,6 +107,14 @@ class ValidatorStatus(Base):
     activation_epoch = Column(Epoch)
     exit_epoch = Column(Epoch)
     withdrawable_epoch = Column(Epoch)
+
+
+class ValidatorBalance(Base):
+    __tablename__ = 'validator_balance'
+    intro_block_root = Column(Root, primary_key=True)
+    intro_slot = Column(Slot)
+    validator_index = Column(ValidatorIndex, primary_key=True)
+    balance = Column(Gwei)
 
 
 class BeaconBlock(Base):
@@ -136,7 +144,7 @@ class BeaconState(Base):
     # like latest-block-header, except that the state-root is nicely up to date before hashing the latest header.
     latest_block_root = Column(Root, ForeignKey('beacon_block.block_root'))
     slot = Column(Slot)
-    eth1_data = Column(Root, ForeignKey('eth1_data.data_root'))
+    eth1_data_root = Column(Root, ForeignKey('eth1_data.data_root'))
 
     fork = Column(Version, ForeignKey('beacon_fork.current_version'))
     eth1_deposit_index = Column(DepositIndex)
@@ -149,7 +157,7 @@ class BeaconState(Base):
 
     # Attestations
     prev_epoch_att_count = Column(Integer)
-    curr_epoch_atte_count = Column(Integer)
+    curr_epoch_att_count = Column(Integer)
 
     # Finality
     justification_bits = Column(String)  # Bitvector[JUSTIFICATION_BITS_LENGTH], as literal bits, e.g. "1001"
