@@ -31,8 +31,8 @@ async def run_eth2_feeds(eth2mon: Eth2Monitor, start_backfill: spec.Slot):
 async def main(eth2_rpc: str):
     # Temporary hack, would be better on per-function call basis.
     # Beacon states take long to fetch, but are rarely fetched.
-    timeout = httpx.Timeout(connect_timeout=2.0,
-                            read_timeout=10.0,
+    timeout = httpx.Timeout(connect_timeout=15.0,
+                            read_timeout=15.0,
                             write_timeout=2.0,
                             pool_timeout=3.0)
     async with Eth2HttpClient(options=Eth2HttpOptions(
