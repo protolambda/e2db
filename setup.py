@@ -31,7 +31,6 @@ setup(
         "eth-utils>=1.8.4",
         "web3>=5.7.0",
         "sqlalchemy>=1.3.16",
-        "psycopg2-binary>=2.8.5",
         "lru-dict==1.1.6",
     ],
     include_package_data=True,

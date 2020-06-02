@@ -1,0 +1,35 @@
+.git/
+.gitignore
+
+.idea
+*.iml
+
+.DS_Store
+Desktop.ini
+*~
+*.swp
+._*
+Thumbs.db
+.Trashes
+.env
+
+
+venv
+build
+dist
+*.egg-info
+*.egg/
+**/*.pyc
+**/__pycache__
+
+.tox
+.coverage
+html/*
+
+# Compiled Documentation
+docs/_build
+
+# Test outputs
+*.db
+*.log
+
