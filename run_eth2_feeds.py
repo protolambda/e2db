@@ -76,6 +76,7 @@ if __name__ == '__main__':
     print(f"Connecting to DB at {args.db_addr}")
     from sqlalchemy import create_engine
     engine = create_engine(args.db_addr)
+    engine.connect()
 
     print("Creating/checking tables")
     Base.metadata.create_all(engine, checkfirst=True)
