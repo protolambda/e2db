@@ -61,7 +61,7 @@ async def main(eth2_rpc: str, watch: bool, backfill: bool, backfill_start: int, 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run eth2 indexing.')
-    parser.add_argument('--db-addr', dest='db_addr', default='sqlite:///testing3.db',
+    parser.add_argument('--db-addr', dest='db_addr', default='sqlite:///testing.db',
                         help='the DB string to use for a connection')
     parser.add_argument('--eth2-addr', dest='eth2_addr', default='http://localhost:5052/',
                         help='the HTTP API address of the Eth2 node to extract data from (currently only Lighthouse)')

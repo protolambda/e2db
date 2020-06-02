@@ -3,14 +3,14 @@ from typing import Optional
 from itertools import zip_longest
 from e2db.models import (
     Fork, BeaconState, Validator, ValidatorStatus, ValidatorBalance,
-    BeaconBlock, SignedBeaconBlock,
+    BeaconBlockBody, BeaconBlock, SignedBeaconBlock,
     Eth1Data, Eth1BlockVote,
     ProposerSlashing, ProposerSlashingInclusion,
     AttesterSlashing, AttesterSlashingInclusion,
     AttestationData, IndexedAttestation, PendingAttestation,
     DepositData, Deposit, DepositInclusion,
     SignedVoluntaryExit, SignedVoluntaryExitInclusion,
-    Checkpoint, format_epoch,
+    Checkpoint, format_epoch, BitsAttestation,
 )
 from eth2spec.phase0 import spec
 
@@ -187,9 +187,30 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         proposer_index=block.proposer_index,
     ))
 
+    def handle_header(block: spec.BeaconBlockHeader):
+        session.merge(BeaconBlock(
+            block_root=block.hash_tree_root(),
+            slot=block.slot,
+            proposer_index=block.proposer_index,
+            parent_root=block.parent_root,
+            state_root=block.state_root,
+            body_root=block.body.hash_tree_root(),
+        ))
+
+    def handle_signed_header(signed_block: spec.SignedBeaconBlockHeader):
+        session.merge(SignedBeaconBlock(
+            root=signed_block.hash_tree_root(),
+            signature=signed_block.signature,
+            block_root=signed_block.message.hash_tree_root(),
+        ))
+
     # Proposer slashings
     proposer_slashing: spec.ProposerSlashing
     for i, proposer_slashing in enumerate(body.proposer_slashings.readonly_iter()):
+        handle_header(proposer_slashing.signed_header_1.message)
+        handle_header(proposer_slashing.signed_header_2.message)
+        handle_signed_header(proposer_slashing.signed_header_1)
+        handle_signed_header(proposer_slashing.signed_header_2)
         session.merge(ProposerSlashing(
             root=proposer_slashing.hash_tree_root(),
             signed_header_1=proposer_slashing.signed_header_1.hash_tree_root(),
@@ -201,24 +222,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
             root=proposer_slashing.hash_tree_root(),
         ))
 
-    # Attester slashings
-    attester_slashing: spec.AttesterSlashing
-    for i, attester_slashing in enumerate(body.attester_slashings.readonly_iter()):
-        session.merge(AttesterSlashing(
-            root=attester_slashing.hash_tree_root(),
-            attestation_1=attester_slashing.attestation_1.hash_tree_root(),
-            attestation_2=attester_slashing.attestation_2.hash_tree_root(),
-        ))
-        session.merge(AttesterSlashingInclusion(
-            intro_block_root=block_root,
-            intro_index=i,
-            root=attester_slashing.hash_tree_root(),
-        ))
-
-    # Attestations
-    attestation: spec.Attestation
-    for i, attestation in enumerate(body.attestations.readonly_iter()):
-        data = attestation.data
+    def handle_att_data(data: spec.AttestationData):
         source_ch = data.source
         source_ch_root = source_ch.hash_tree_root()
         session.merge(Checkpoint(
@@ -242,19 +246,48 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
             source=source_ch_root,
             target=target_ch_root,
         ))
-        indexed = spec.get_indexed_attestation(post_state, attestation)
-        indexed_att_root = indexed.hash_tree_root()
+
+    def handle_indexed_att(indexed: spec.IndexedAttestation):
         session.merge(IndexedAttestation(
-            indexed_attestation_root=indexed_att_root,
-            normal_attestation_root=attestation.hash_tree_root(),
+            indexed_attestation_root=indexed.hash_tree_root(),
             attesting_indices=', '.join(map(str, indexed.attesting_indices.readonly_iter())),
-            data=data_root,
+            data=indexed.data.hash_tree_root(),
             signature=indexed.signature,
+        ))
+
+    # Attester slashings
+    attester_slashing: spec.AttesterSlashing
+    for i, attester_slashing in enumerate(body.attester_slashings.readonly_iter()):
+        handle_att_data(attester_slashing.attestation_1.data)
+        handle_att_data(attester_slashing.attestation_2.data)
+        handle_indexed_att(attester_slashing.attestation_1)
+        handle_indexed_att(attester_slashing.attestation_2)
+        session.merge(AttesterSlashing(
+            root=attester_slashing.hash_tree_root(),
+            attestation_1=attester_slashing.attestation_1.hash_tree_root(),
+            attestation_2=attester_slashing.attestation_2.hash_tree_root(),
+        ))
+        session.merge(AttesterSlashingInclusion(
+            intro_block_root=block_root,
+            intro_index=i,
+            root=attester_slashing.hash_tree_root(),
+        ))
+
+    # Attestations
+    attestation: spec.Attestation
+    for i, attestation in enumerate(body.attestations.readonly_iter()):
+        data = attestation.data
+        handle_att_data(data)
+        indexed = spec.get_indexed_attestation(post_state, attestation)
+        handle_indexed_att(indexed)
+        session.merge(BitsAttestation(
+            bits_attestation_root=attestation.hash_tree_root(),
+            indexed_attestation_root=indexed.hash_tree_root(),
         ))
         session.merge(PendingAttestation(
             intro_block_root=block_root,
             intro_index=i,
-            indexed_att=indexed_att_root,
+            indexed_att=indexed.hash_tree_root(),
             inclusion_delay=block.slot - data.slot,
             proposer_index=block.proposer_index,
         ))
@@ -299,6 +332,20 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
             root=sig_vol_exit.hash_tree_root(),
         ))
 
+    # The body
+    session.merge(BeaconBlockBody(
+        body_root=body.hash_tree_root(),
+        randao_reveal=body.randao_reveal,
+        eth1_data_root=body.eth1_data.hash_tree_root(),
+        graffiti=body.graffiti,
+        # Operations
+        proposer_slashings_count=len(body.proposer_slashings),
+        attester_slashings_count=len(body.attester_slashings),
+        attestations_count=len(body.attestations),
+        deposits_count=len(body.deposits),
+        voluntary_exits_count=len(body.voluntary_exits),
+    ))
+
     # The block itself
     session.merge(BeaconBlock(
         block_root=block_root,
@@ -307,8 +354,6 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         parent_root=block.parent_root,
         state_root=block.state_root,
         body_root=body.hash_tree_root(),
-        randao_reveal=body.randao_reveal,
-        graffiti=body.graffiti,
     ))
 
     # Block signature

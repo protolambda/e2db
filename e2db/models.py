@@ -37,13 +37,13 @@ def format_epoch(epoch: int) -> int:
 class CanonEth1Block(Base):
     __tablename__ = 'canon_eth1_block'
     block_num = Column(BlockNumber, primary_key=True)
-    block_hash = Column(Eth1BlockHash, ForeignKey('eth1_block.block_hash'))
+    block_hash = Column(Eth1BlockHash)
 
 
 class Eth1Block(Base):
     __tablename__ = 'eth1_block'
     block_hash = Column(Eth1BlockHash, primary_key=True)
-    parent_hash = Column(Eth1BlockHash, ForeignKey('eth1_block.block_hash'), nullable=True)
+    parent_hash = Column(Eth1BlockHash, nullable=True)
 
     block_num = Column(BlockNumber)
     timestamp = Column(Integer)
@@ -61,9 +61,9 @@ class Eth1Data(Base):
 
 class Eth1BlockVote(Base):
     __tablename__ = 'eth1_block_vote'
-    beacon_block_root = Column(Root, ForeignKey('beacon_block.block_root'), primary_key=True)
+    beacon_block_root = Column(Root, primary_key=True)
     slot = Column(Slot)
-    eth1_data_root = Column(Root, ForeignKey('eth1_data.data_root'))
+    eth1_data_root = Column(Root)
     proposer_index = Column(ValidatorIndex)
 
 
@@ -78,7 +78,7 @@ class DepositData(Base):
 
 class DepositTx(Base):
     __tablename__ = 'deposit_tx'
-    block_hash = Column(Eth1BlockHash, ForeignKey('eth1_block.block_hash'))
+    block_hash = Column(Eth1BlockHash)
     block_num = Column(Integer)
     tx_index = Column(Integer)
     tx_hash = Column(TxHash, primary_key=True)
@@ -122,11 +122,23 @@ class BeaconBlock(Base):
     block_root = Column(Root, primary_key=True)
     slot = Column(Slot)
     proposer_index = Column(ValidatorIndex)
-    parent_root = Column(Root, ForeignKey('beacon_block.block_root'))
-    state_root = Column(Root, ForeignKey('beacon_state.state_root'))
-    body_root = Column(Root)
+    parent_root = Column(Root)
+    state_root = Column(Root)
+    body_root = Column(Root)  # Not a foreign key, i.e. body may not exist if we just have header data.
+
+
+class BeaconBlockBody(Base):
+    __tablename__ = 'beacon_block_body'
+    body_root = Column(Root, primary_key=True)
     randao_reveal = Column(BLSSignature)
+    eth1_data_root = Column(Root, ForeignKey('eth1_data.data_root'))
     graffiti = Column(Bytes32)
+    # Operations
+    proposer_slashings_count = Column(Integer)
+    attester_slashings_count = Column(Integer)
+    attestations_count = Column(Integer)
+    deposits_count = Column(Integer)
+    voluntary_exits_count = Column(Integer)
 
 
 class SignedBeaconBlock(Base):
@@ -142,7 +154,7 @@ class BeaconState(Base):
     # Post state root, as referenced in the beacon block
     state_root = Column(Root, primary_key=True)
     # like latest-block-header, except that the state-root is nicely up to date before hashing the latest header.
-    latest_block_root = Column(Root, ForeignKey('beacon_block.block_root'))
+    latest_block_root = Column(Root)
     slot = Column(Slot)
     eth1_data_root = Column(Root, ForeignKey('eth1_data.data_root'))
 
@@ -169,7 +181,7 @@ class BeaconState(Base):
 class CanonBeaconBlock(Base):
     __tablename__ = 'canon_beacon_block'
     slot = Column(Slot, primary_key=True)
-    block_root = Column(Root, ForeignKey('beacon_block.block_root'))
+    block_root = Column(Root)
 
 
 class Fork(Base):
@@ -209,10 +221,15 @@ class AttestationData(Base):
 class IndexedAttestation(Base):
     __tablename__ = 'indexed_attestation'
     indexed_attestation_root = Column(Root, primary_key=True)
-    normal_attestation_root = Column(Root)
     attesting_indices = Column(String)  # List[ValidatorIndex, MAX_VALIDATORS_PER_COMMITTEE]
     data = Column(Root, ForeignKey('attestation_data.att_data_root'))
     signature = Column(BLSSignature)
+
+
+class BitsAttestation(Base):
+    __tablename__ = 'bits_attestation'
+    bits_attestation_root = Column(Root, primary_key=True)
+    indexed_attestation_root = Column(Root)
 
 
 # PendingAttestation is essentially a "AttestationInclusion"
