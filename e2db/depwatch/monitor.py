@@ -121,7 +121,7 @@ class DepositMonitor(object):
         parsed_logs = tuple(DepositLog.from_contract_log_dict(log) for log in processed_logs)
         return parsed_logs
 
-    async def watch_logs(self, block_num_start: BlockNumber, dest: trio.MemorySendChannel,
+    async def watch_logs(self, block_num_start: BlockNumber, dest: trio.MemorySendChannel, step_fail_wait: float = 2.0,
                          poll_interval: float = 6.0):
         """
         Watches chain, starting from block_num_start, for deposit logs. It watches for pending transactions too.
@@ -131,11 +131,18 @@ class DepositMonitor(object):
 
         :param block_num_start: Starting point.
         :param poll_interval: How often to poll the filter for new entries.
+        :param step_fail_wait: How long to wait until retrying a step.
         :param dest: A Trio memory channel to send batches (lists) of DepositLog entries to.
         """
         async with DepLogFilterSub(self._deposit_contract, block_num_start, 'pending') as sub:
             while True:
-                batch = sub.log_filt.get_new_entries()
+                try:
+                    batch = sub.log_filt.get_new_entries()
+                except Exception as e:
+                    print(f"warning: eth1 get-blocks step in watching failed: {e}")
+                    print(f"waiting {step_fail_wait} seconds to try again")
+                    await trio.sleep(step_fail_wait)
+                    continue
                 print(f"processing batch of {len(batch)} deposit log entries")
                 parsed_batch = []
                 for log in batch:
@@ -147,7 +154,7 @@ class DepositMonitor(object):
                 await trio.sleep(poll_interval)
 
     async def backfill_logs(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 0.5,
+                            dest: trio.MemorySendChannel, step_slowdown: float = 0.5, step_fail_wait: float = 2.0,
                             step_block_count: int = 1024):
         """
         Backfill deposit logs, for the given block range. Send batches (list) of DepositLog to dest.
@@ -156,41 +163,57 @@ class DepositMonitor(object):
         :param to_block: End point (exclusive)
         :param dest: A Trio memory channel to send batches (lists) of DepositLog entries to.
         :param step_slowdown: Sleep the given amount of seconds between steps, to avoid rate-limit/stress.
+        :param step_fail_wait: How long to wait until retrying a step.
         :param step_block_count: The amount of blocks to scan at a time for logs.
         """
         curr_dep_count = 0
-        for curr_block_num in range(from_block, to_block, step_block_count):
+        curr_block_num = from_block
+        while curr_block_num < to_block:
             next_block_num = min(curr_block_num + step_block_count, to_block)
-            next_dep_count = self.get_deposit_count(BlockNumber(next_block_num))
-            print(f"deposit count {next_dep_count} at block #{next_block_num}")
-            if next_dep_count > curr_dep_count:
-                logs = self.get_logs(BlockNumber(curr_block_num), BlockNumber(next_block_num))
-                print(f"fetched {len(logs)} logs from block {curr_block_num} to {next_block_num}")
-                if len(logs) > 0:
-                    await dest.send(logs)
+            try:
+                next_dep_count = self.get_deposit_count(BlockNumber(next_block_num))
+                print(f"deposit count {next_dep_count} at block #{next_block_num}")
+                if next_dep_count > curr_dep_count:
+                    logs = self.get_logs(BlockNumber(curr_block_num), BlockNumber(next_block_num))
+                    print(f"fetched {len(logs)} logs from block {curr_block_num} to {next_block_num}")
+                    if len(logs) > 0:
+                        await dest.send(logs)
+            except Exception as e:
+                print(f"warning: eth1 get-log step in backfill failed: {e}")
+                print(f"waiting {step_fail_wait} seconds to try again")
+                await trio.sleep(step_fail_wait)
+                continue
             await trio.sleep(step_slowdown)
+            curr_block_num += step_block_count
 
-    async def watch_blocks(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0):
+    async def watch_blocks(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0, step_fail_wait: float = 2.0):
         """
         Watch for the latest blocks, enhance them to EnhancedEth1Block, and send them to dest.
         :param dest: A Trio memory channel to send enhanced block entries to one by one.
         :param poll_interval: Wait for the given amount of seconds before checking for new entries.
+        :param step_fail_wait: How long to wait until retrying a step.
         """
         block_filt = self.w3.eth.filter('latest')
         while True:
-            batch = block_filt.get_new_entries()
-            print(f"processing batch of {len(batch)} block entries")
-            block_hash: Hash32
-            for block_hash in batch:
-                print(f"incoming block: {block_hash.hex()}")
-                block = self.get_block(block_hash)
-                dep_count = self.get_deposit_count(block.number)
-                enhanced_eth1_block = EnhancedEth1Block(eth1_block=block, deposit_count=dep_count)
-                await dest.send(enhanced_eth1_block)
+            try:
+                batch = block_filt.get_new_entries()
+                print(f"processing batch of {len(batch)} block entries")
+                block_hash: Hash32
+                for block_hash in batch:
+                    print(f"incoming block: {block_hash.hex()}")
+                    block = self.get_block(block_hash)
+                    dep_count = self.get_deposit_count(block.number)
+                    enhanced_eth1_block = EnhancedEth1Block(eth1_block=block, deposit_count=dep_count)
+                    await dest.send(enhanced_eth1_block)
+            except Exception as e:
+                print(f"warning: eth1 get-blocks step in watching failed: {e}")
+                print(f"waiting {step_fail_wait} seconds to try again")
+                await trio.sleep(step_fail_wait)
+                continue
             await trio.sleep(poll_interval)
 
     async def backfill_blocks(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 0.1):
+                            dest: trio.MemorySendChannel, step_slowdown: float = 0.1, step_fail_wait: float = 2.0):
         """
         Backfill eth1 blocks, for the given block range. EnhancedEth1Block are send one by one to dest.
         Optionally change the step duration.
@@ -198,10 +221,17 @@ class DepositMonitor(object):
         :param to_block: End point (exclusive)
         :param dest: A Trio memory channel to send enhanced block entries to one by one.
         :param step_slowdown: Sleep the given amount of seconds between steps, to avoid rate-limit/stress.
+        :param step_fail_wait: How long to wait until retrying a step.
         """
         for curr_block_num in range(from_block, to_block):
-            block = self.get_block(curr_block_num)
-            dep_count = self.get_deposit_count(BlockNumber(curr_block_num))
+            try:
+                block = self.get_block(curr_block_num)
+                dep_count = self.get_deposit_count(BlockNumber(curr_block_num))
+            except Exception as e:
+                print(f"warning: eth1 get-block step in backfill failed: {e}")
+                print(f"waiting {step_fail_wait} seconds to try again")
+                await trio.sleep(step_fail_wait)
+                continue
             enhanced_eth1_block = EnhancedEth1Block(eth1_block=block, deposit_count=dep_count)
             await dest.send(enhanced_eth1_block)
             await trio.sleep(step_slowdown)
