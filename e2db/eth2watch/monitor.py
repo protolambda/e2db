@@ -1,6 +1,6 @@
 import trio
-from typing import Dict, Set, Tuple, Optional
-from eth2.models.lighthouse import Eth2API, APIBlock, ForkchoiceData, HeadInfo
+from typing import Dict, Set, Optional
+from eth2.models.lighthouse import Eth2API, ForkchoiceData, HeadInfo
 from eth2spec.phase0 import spec
 from lru import LRU
 import traceback
@@ -20,23 +20,54 @@ def unchecked_state_transition(state: spec.BeaconState, signed_block: spec.Signe
 class Eth2Monitor(object):
     api: Eth2API
 
-    state_by_block_slot_cache_dict = LRU(size=10)
+    state_by_block_slot_cache_dict = LRU(size=20)
+    state_by_state_root_cache_dict = LRU(size=20)
+    block_cache = LRU(size=20)
 
     def __init__(self, api: Eth2API) -> None:
         self.api = api
 
+    async def get_block(self, block_root: spec.Root) -> spec.SignedBeaconBlock:
+        if block_root not in self.block_cache:
+            print(f"fetching block {block_root.hex()}")
+            api_block = await self.api.beacon.block(root=block_root)
+            signed_block = api_block.beacon_block
+            await self.cache_signed_block(signed_block)
+            return signed_block.copy()
+
+        out = self.block_cache[block_root]
+        print(f"block getter out: {out.hash_tree_root().hex()} key: ({block_root.hex()})")
+        return out.copy()
+
+    async def get_state_by_state_root(self, state_root: spec.Root) -> spec.BeaconState:
+        if state_root not in self.state_by_state_root_cache_dict:
+            print(f"fetching state {state_root.hex()}")
+            api_state = await self.api.beacon.state(root=state_root)
+            state = api_state.beacon_state
+
+            temp_header = state.latest_block_header.copy()
+            if temp_header.state_root == spec.Bytes32():
+                temp_header.state_root = state.hash_tree_root()
+            block_root = spec.Root(temp_header.hash_tree_root())
+
+            await self.cache_state(block_root, state)
+            return state.copy()
+
+        out = self.state_by_state_root_cache_dict[state_root]
+        print(f"state (by state root) getter out: {out.hash_tree_root().hex()} key: ({state_root.hex()})")
+        return out.copy()
+
     async def get_state_by_block_and_slot(self, block_root: spec.Root, slot: spec.Slot) -> spec.BeaconState:
         """May fail if the state is being fetched from API"""
+
         key = (block_root, slot)
         if key not in self.state_by_block_slot_cache_dict:
             print(f"key: ({block_root.hex()}, {slot})")
             print(f"cached: " + ', '.join(f"({b.hex()}, {s})" for b,s in self.state_by_block_slot_cache_dict.keys()))
-            print(f"fetching block {block_root.hex()}")
-            api_block = await self.api.beacon.block(root=block_root)
-            pre_state_root = api_block.beacon_block.message.state_root
+            signed_block = await self.get_block(block_root)
+            pre_state_root = signed_block.message.state_root
             print(f"fetching state {pre_state_root.hex()}")
-            api_state = await self.api.beacon.state(root=pre_state_root)
-            state = api_state.beacon_state
+            state = await self.get_state_by_state_root(state_root=pre_state_root)
             if state.slot < slot:
                 spec.process_slots(state, slot)
             print(f"computed state {state.hash_tree_root().hex()}")
@@ -44,14 +75,22 @@ class Eth2Monitor(object):
             return state.copy()
 
         out = self.state_by_block_slot_cache_dict[key]
-        print(f"out: {out.hash_tree_root().hex()} key: ({block_root.hex()}, {slot})")
+        print(f"state (by block root and slot) getter out: {out.hash_tree_root().hex()} key: ({block_root.hex()}, {slot})")
         return out.copy()
+
+    async def cache_signed_block(self, signed_block: spec.SignedBeaconBlock):
+        block = signed_block.message
+        block_root = spec.Root(block.hash_tree_root())
+        print(f"caching block (root: {block_root.hex()}, slot: {block.slot})")
+        cached = signed_block.copy()
+        self.block_cache[block_root] = cached
 
     async def cache_state(self, block_root: spec.Root, state: spec.BeaconState):
         print(f"caching state (last block: {block_root.hex()}, slot: {state.latest_block_header.slot}) "
               f"{state.hash_tree_root().hex()} (state slot {state.slot})")
         cached = state.copy()
         self.state_by_block_slot_cache_dict[(block_root, state.slot)] = cached
+        self.state_by_state_root_cache_dict[state.hash_tree_root()] = cached
 
     async def _fetch_state_and_process_block(self, signed_block: Optional[spec.SignedBeaconBlock], dest: trio.MemorySendChannel, is_canon: bool) -> bool:
         block = signed_block.message
@@ -163,16 +202,17 @@ class Eth2Monitor(object):
                 if node.root in new_block_roots:
                     try:
                         print(f"eth2 watcher is fetching block {node.root.hex()}")
-                        api_block = await self.api.beacon.block(root=node.root)
-                        print(f"fetched block {api_block.root.hex()} (slot {api_block.beacon_block.message.slot}, "
-                              f"state root {api_block.beacon_block.message.state_root.hex()}, parent root: {api_block.beacon_block.message.parent_root.hex()}) "
+                        signed_block = await self.get_block(block_root=node.root)
+                        block = signed_block.message
+                        print(f"fetched block {block.hash_tree_root().hex()} (slot {block.slot}, "
+                              f"state root {block.state_root.hex()}, parent root: {block.parent_root.hex()}) "
                               f"for node block {node.root.hex()}")
                     except Exception as e:
                         print(f"Failed to fetch block for by root {node.root.hex()}: {e}")
                         await trio.sleep(poll_interval)
                         continue
                     is_canon = node.best_descendant == head_node_index or node.root == head_node.root
-                    ok = await self._fetch_state_and_process_block(signed_block=api_block.beacon_block,
+                    ok = await self._fetch_state_and_process_block(signed_block=signed_block,
                                                                    dest=dest, is_canon=is_canon)
                     if not ok:
                         print(f"state transition/fetch error! slot {node.slot}, block root: {node.root.hex()} "
@@ -211,6 +251,7 @@ class Eth2Monitor(object):
         if from_slot == 0:
             genesis = True
             from_slot = 1
+        # Don't try to catch an exception here, if the first thing fails, then we restart the process as a whole.
         api_block = await self.api.beacon.block(slot=spec.Slot(from_slot-1))
         if genesis:
             api_state = await self.api.beacon.state(slot=spec.Slot(0))
@@ -230,7 +271,12 @@ class Eth2Monitor(object):
             if signed_block.message.slot < slot:
                 print(f"empty slot {slot}")
                 # We got the same block again, it's an empty slot.
-                pre_state = await self.get_state_by_block_and_slot(prev_block_root, spec.Slot(slot-1))
+                try:
+                    pre_state = await self.get_state_by_block_and_slot(prev_block_root, spec.Slot(slot-1))
+                except Exception as e:
+                    print(f"Failed to fetch state for slot {slot} after block {prev_block_root.hex()}: {e}")
+                    await trio.sleep(step_slowdown)
+                    continue
                 await self._fetch_state_empty_slots(pre_state, 1, dest, 1)
                 print(f"completed processing empty slot {slot}")
             else:
