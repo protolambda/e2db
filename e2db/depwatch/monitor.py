@@ -154,7 +154,7 @@ class DepositMonitor(object):
                 await trio.sleep(poll_interval)
 
     async def backfill_logs(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 0.5, step_fail_wait: float = 2.0,
+                            dest: trio.MemorySendChannel, step_slowdown: float = 1.5, step_fail_wait: float = 2.0,
                             step_block_count: int = 1024):
         """
         Backfill deposit logs, for the given block range. Send batches (list) of DepositLog to dest.
@@ -213,7 +213,7 @@ class DepositMonitor(object):
             await trio.sleep(poll_interval)
 
     async def backfill_blocks(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 0.1, step_fail_wait: float = 2.0):
+                            dest: trio.MemorySendChannel, step_slowdown: float = 1.5, step_fail_wait: float = 2.0):
         """
         Backfill eth1 blocks, for the given block range. EnhancedEth1Block are send one by one to dest.
         Optionally change the step duration.
