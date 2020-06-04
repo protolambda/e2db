@@ -121,7 +121,7 @@ class DepositMonitor(object):
         parsed_logs = tuple(DepositLog.from_contract_log_dict(log) for log in processed_logs)
         return parsed_logs
 
-    async def watch_logs(self, block_num_start: BlockNumber, dest: trio.MemorySendChannel, step_fail_wait: float = 2.0,
+    async def watch_logs(self, block_num_start: BlockNumber, dest: trio.MemorySendChannel, step_fail_wait: float = 20.0,
                          poll_interval: float = 6.0):
         """
         Watches chain, starting from block_num_start, for deposit logs. It watches for pending transactions too.
@@ -154,7 +154,7 @@ class DepositMonitor(object):
                 await trio.sleep(poll_interval)
 
     async def backfill_logs(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 1.5, step_fail_wait: float = 2.0,
+                            dest: trio.MemorySendChannel, step_slowdown: float = 1.5, step_fail_wait: float = 20.0,
                             step_block_count: int = 1024):
         """
         Backfill deposit logs, for the given block range. Send batches (list) of DepositLog to dest.
@@ -186,7 +186,7 @@ class DepositMonitor(object):
             await trio.sleep(step_slowdown)
             curr_block_num += step_block_count
 
-    async def watch_blocks(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0, step_fail_wait: float = 2.0):
+    async def watch_blocks(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0, step_fail_wait: float = 20.0):
         """
         Watch for the latest blocks, enhance them to EnhancedEth1Block, and send them to dest.
         :param dest: A Trio memory channel to send enhanced block entries to one by one.
@@ -213,7 +213,7 @@ class DepositMonitor(object):
             await trio.sleep(poll_interval)
 
     async def backfill_blocks(self, from_block: BlockNumber, to_block: BlockNumber,
-                            dest: trio.MemorySendChannel, step_slowdown: float = 1.5, step_fail_wait: float = 2.0):
+                            dest: trio.MemorySendChannel, step_slowdown: float = 1.5, step_fail_wait: float = 20.0):
         """
         Backfill eth1 blocks, for the given block range. EnhancedEth1Block are send one by one to dest.
         Optionally change the step duration.
