@@ -169,7 +169,7 @@ class Eth2Monitor(object):
                 processed_node_roots.add(node.root)
 
             # Add all processed nodes
-            last_hot_node_roots += processed_node_roots
+            last_hot_node_roots |= processed_node_roots
             # Remove nodes that are no longer hot
             last_hot_node_roots &= hot_roots
 
