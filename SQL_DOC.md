@@ -32,7 +32,12 @@ Creating a read-only user `eth2reader`:
 
 ```
 CREATE USER eth2reader WITH PASSWORD 'passwordhere';
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO eth2reader
+
+\c witti
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO eth2reader;
+GRANT USAGE ON SCHEMA public TO eth2reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO eth2reader;
 ```
 
 Working with binary blobs as hex:
