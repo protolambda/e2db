@@ -1,6 +1,6 @@
 import trio
-from typing import Dict, Set, Optional
-from eth2.models.lighthouse import Eth2API, APIBlock, ForkchoiceData
+from typing import Dict, Set, Tuple, Optional
+from eth2.models.lighthouse import Eth2API, APIBlock, ForkchoiceData, HeadInfo
 from eth2spec.phase0 import spec
 from lru import LRU
 import traceback
@@ -53,7 +53,7 @@ class Eth2Monitor(object):
         cached = state.copy()
         self.state_by_block_slot_cache_dict[(block_root, state.slot)] = cached
 
-    async def _fetch_state_and_process_block(self, signed_block: Optional[spec.SignedBeaconBlock], dest: trio.MemorySendChannel) -> bool:
+    async def _fetch_state_and_process_block(self, signed_block: Optional[spec.SignedBeaconBlock], dest: trio.MemorySendChannel, is_canon: bool) -> bool:
         block = signed_block.message
         block_root = spec.Root(block.hash_tree_root())
         prev_slot = spec.Slot(block.slot - 1)
@@ -80,19 +80,23 @@ class Eth2Monitor(object):
                   f" does not match computed state root ({state.hash_tree_root().hex()})")
             return False
         await self.cache_state(block_root, state)
-        await dest.send((pre_state, state.copy(), signed_block))
+        await dest.send((pre_state, state.copy(), signed_block, is_canon))
         return True
 
-    async def _fetch_state_empty_slots(self, state: spec.BeaconState, delta_slots: int, dest: trio.MemorySendChannel) -> spec.BeaconState:
+    async def _fetch_state_empty_slots(self, state: spec.BeaconState, delta_slots: int, dest: trio.MemorySendChannel, deltas_canon: int) -> spec.BeaconState:
         state = state.copy()
-        to_slot = state.slot + delta_slots
-        for slot in range(state.slot + 1, to_slot + 1):
+        start_slot = state.slot + 1
+        to_slot = start_slot + delta_slots
+        # If deltas_canon == 0, then none of the slots are canon
+        canon_to_slot = start_slot + deltas_canon
+        for slot in range(start_slot, to_slot):
             pre_state = state.copy()
             print(f"processing state transition of empty slot {slot} on pre-state {pre_state.hash_tree_root().hex()})")
             spec.process_slots(state, spec.Slot(slot))
             block_root = spec.Root(state.latest_block_header.hash_tree_root())
             await self.cache_state(block_root, state)
-            await dest.send((pre_state, state.copy(), None))
+            is_canon = slot < canon_to_slot
+            await dest.send((pre_state, state.copy(), None, is_canon))
         return state
 
     async def watch_hot_chain(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0):
@@ -100,8 +104,10 @@ class Eth2Monitor(object):
         while True:
             # Poll the forkchoice data
             hot: ForkchoiceData
+            head_info: HeadInfo
             try:
                 hot = await self.api.advanced.fork_choice()
+                head_info = await self.api.beacon.head()
             except Exception as e:
                 print(f"Failed to fetch fork choice data, error: {e}")
                 await trio.sleep(poll_interval)
@@ -112,20 +118,40 @@ class Eth2Monitor(object):
             new_block_roots = hot_roots - last_hot_node_roots
             new_nodes = list(map(lambda r: hot.nodes[hot.indices[r]], new_block_roots))
 
-            if len(new_nodes) == 0:
+            if head_info.block_root not in hot_roots:
+                print("head root cannot be found in hot data, skipping watch step")
                 await trio.sleep(poll_interval)
                 continue
+
+            if len(new_nodes) == 0:
+                print("no new hot block nodes")
+                await trio.sleep(poll_interval)
+                continue
+
+            head_node_index = hot.indices[head_info.block_root]
+            head_node = hot.nodes[head_node_index]
+            if head_node.best_descendant is not None:
+                head_node_index = head_node.best_descendant
+                head_node = hot.nodes[head_node_index]
 
             # Block root, mapped to all following empty slots that lead up to a later block
             # Including the slot of the later block itself, before the later block was applied.
             empty_slots: Dict[spec.Root, Set[spec.Slot]] = dict()
+            # Similarly, track which of those are canonical. Which is always a subset, and may be empty.
+            canon_empty_slots: Dict[spec.Root, Set[spec.Slot]] = dict()
             for node in new_nodes:
+                is_canon = node.best_descendant == head_node_index or node.root == head_node.root
                 if node.parent is not None:
                     parent = hot.nodes[node.parent]
                     if parent.root not in empty_slots:
                         empty_slots[parent.root] = set()
+                    if is_canon:
+                        canon_empty_slots[parent.root] = set()
                     for slot in range(parent.slot + 1, node.slot+1):
                         empty_slots[parent.root].add(slot)
+                    if is_canon:
+                        for slot in range(parent.slot + 1, node.slot+1):
+                            canon_empty_slots[parent.root].add(slot)
 
             # Process all new blocks, sorted by increasing slot.
             sorted_nodes = sorted(hot.nodes, key=lambda x: x.slot)
@@ -145,8 +171,9 @@ class Eth2Monitor(object):
                         print(f"Failed to fetch block for by root {node.root.hex()}: {e}")
                         await trio.sleep(poll_interval)
                         continue
-
-                    ok = await self._fetch_state_and_process_block(signed_block=api_block.beacon_block, dest=dest)
+                    is_canon = node.best_descendant == head_node_index or node.root == head_node.root
+                    ok = await self._fetch_state_and_process_block(signed_block=api_block.beacon_block,
+                                                                   dest=dest, is_canon=is_canon)
                     if not ok:
                         print(f"state transition/fetch error! slot {node.slot}, block root: {node.root.hex()} "
                               f"state root: {node.state_root.hex()}")
@@ -162,8 +189,13 @@ class Eth2Monitor(object):
                         continue
 
                     following_empty_slots = len(empty_slots[node.root])
+                    # 0 or more of these empty slots may be leading up to the canonical chain.
+                    # Count them, and share that these will be canonical.
+                    following_canon_empty_slots = 0 if node.root not in canon_empty_slots else len(canon_empty_slots[node.root])
                     print(f"after {node.root} {following_empty_slots} empty slots follow")
-                    await self._fetch_state_empty_slots(state=pre_state, delta_slots=following_empty_slots, dest=dest)
+                    await self._fetch_state_empty_slots(state=pre_state,
+                                                        delta_slots=following_empty_slots, dest=dest,
+                                                        deltas_canon=following_canon_empty_slots)
 
                 # If all processing succeeds, then keep remember the node to not re-do work for it next round
                 processed_node_roots.add(node.root)
@@ -183,7 +215,7 @@ class Eth2Monitor(object):
         if genesis:
             api_state = await self.api.beacon.state(slot=spec.Slot(0))
             await self.cache_state(api_block.root, api_state.beacon_state)
-            await dest.send((None, api_state.beacon_state, None))
+            await dest.send((None, api_state.beacon_state, None, True))
         prev_block_root = api_block.root
         print(f"starting block root: {prev_block_root}")
         slot = from_slot
@@ -199,12 +231,12 @@ class Eth2Monitor(object):
                 print(f"empty slot {slot}")
                 # We got the same block again, it's an empty slot.
                 pre_state = await self.get_state_by_block_and_slot(prev_block_root, spec.Slot(slot-1))
-                await self._fetch_state_empty_slots(pre_state, 1, dest)
+                await self._fetch_state_empty_slots(pre_state, 1, dest, 1)
                 print(f"completed processing empty slot {slot}")
             else:
                 print(f"block {signed_block.message.hash_tree_root().hex()} state_root: {signed_block.message.state_root.hex()} parent_root: {signed_block.message.parent_root.hex()} slot: {signed_block.message.slot}")
                 ok = await self._fetch_state_and_process_block(
-                    signed_block=signed_block, dest=dest)
+                    signed_block=signed_block, dest=dest, is_canon=True)
                 if not ok:
                     print(f"state transition/fetch error! slot {slot}, block: {signed_block.message.hash_tree_root().hex()}")
                     continue

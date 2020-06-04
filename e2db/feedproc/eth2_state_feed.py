@@ -11,6 +11,7 @@ from e2db.models import (
     DepositData, Deposit, DepositInclusion,
     SignedVoluntaryExit, SignedVoluntaryExitInclusion,
     Checkpoint, format_epoch, BitsAttestation,
+    CanonBeaconBlock, CanonBeaconState,
 )
 from eth2spec.phase0 import spec
 
@@ -364,11 +365,40 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     ))
 
 
+def calc_beacon_proposer_index(state: BeaconState, slot: spec.Slot) -> spec.ValidatorIndex:
+    epoch = spec.compute_epoch_at_slot(slot)
+    seed = spec.hash(spec.get_seed(state, epoch, spec.DOMAIN_BEACON_PROPOSER) + spec.int_to_bytes(state.slot, length=8))
+    indices = spec.get_active_validator_indices(state, epoch)
+    return spec.compute_proposer_index(state, indices, seed)
+
+
+def store_canon_chain(session: Session, post: spec.BeaconState,
+                      signed_block: Optional[spec.SignedBeaconBlock]):
+    proposer_index: spec.ValidatorIndex
+    if signed_block is not None:
+        block = signed_block.message
+        assert post.slot == block.slot
+        session.merge(CanonBeaconBlock(
+            slot=block.slot,
+            block_root=block.hash_tree_root(),
+        ))
+        proposer_index = block.proposer_index
+    else:
+        proposer_index = calc_beacon_proposer_index(post, post.slot)
+
+    session.merge(CanonBeaconState(
+        slot=post.slot,
+        state_root=post.hash_tree_root(),
+        proposer_index=proposer_index,
+        empty_slot=(signed_block is None)
+    ))
+
+
 async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     prev_state: spec.BeaconState
     state: spec.BeaconState
     block: Optional[spec.SignedBeaconBlock]
-    async for (prev_state, post_state, block) in recv:
+    async for (prev_state, post_state, block, is_canon) in recv:
         if block is not None:
             print(f"storing block {block.hash_tree_root().hex()}")
             store_block(session, post_state, signed_block=block)
@@ -381,4 +411,7 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
             print(f"storing validator diff between pre {prev_state.hash_tree_root().hex()}"
                   f" and post {post_state.hash_tree_root().hex()}")
             store_validator_diff(session, prev_state, post_state)
+        if is_canon:
+            print(f"storing canonical ref to post-state {post_state.hash_tree_root().hex()}")
+            store_canon_chain(session, post_state, block)
         session.commit()

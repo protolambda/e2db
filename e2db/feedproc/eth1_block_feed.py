@@ -1,7 +1,7 @@
 import trio
 from typing import Sequence
 from e2db.depwatch.monitor import EnhancedEth1Block
-from e2db.models import Eth1Block
+from e2db.models import Eth1Block, CanonEth1Block
 from sqlalchemy.orm import Session
 
 
@@ -16,5 +16,8 @@ async def ev_eth1_block_loop(session: Session, recv: trio.MemoryReceiveChannel):
             timestamp=ev.eth1_block.timestamp,
             deposit_count=ev.deposit_count,
         ))
+        session.merge(CanonEth1Block(
+            block_num=ev.eth1_block.number,
+            block_hash=ev.eth1_block.block_hash,
+        ))
         session.commit()
-

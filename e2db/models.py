@@ -184,6 +184,15 @@ class CanonBeaconBlock(Base):
     block_root = Column(Root)
 
 
+class CanonBeaconState(Base):
+    __tablename__ = 'canon_beacon_state'
+    slot = Column(Slot, primary_key=True)
+    state_root = Column(Root)
+    # Regardless of the slot being empty or not, there will always be an assigned proposer.
+    proposer_index = Column(ValidatorIndex)
+    empty_slot = Column(Boolean)
+
+
 class Fork(Base):
     __tablename__ = 'beacon_fork'
     current_version = Column(Version, primary_key=True)
