@@ -39,7 +39,7 @@ async def run_eth2_feeds(eth2mon: Eth2Monitor, watch: bool, backfill: bool, star
             else:
                 end_backfill_slot = spec.Slot(end_backfill)
 
-            print(f"backfilling eth2 chain, slots: {start_backfill} to {end_backfill}")
+            print(f"backfilling eth2 chain, slots: {start_backfill} to {'end' if end_backfill < 0 else end_backfill}")
             await eth2mon.backfill_cold_chain(spec.Slot(start_backfill), end_backfill_slot, send)
 
 

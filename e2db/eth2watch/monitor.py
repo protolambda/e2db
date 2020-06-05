@@ -36,19 +36,20 @@ class Eth2Monitor(object):
             return signed_block.copy()
 
         out = self.block_cache[block_root]
-        print(f"block getter out: {out.hash_tree_root().hex()} key: ({block_root.hex()})")
+        print(f"block getter out: {out.message.hash_tree_root().hex()} key: ({block_root.hex()})")
         return out.copy()
 
     async def get_state_by_state_root(self, state_root: spec.Root) -> spec.BeaconState:
         if state_root not in self.state_by_state_root_cache_dict:
-            print(f"fetching state {state_root.hex()}")
+            print(f"fetching state by state root {state_root.hex()}")
             api_state = await self.api.beacon.state(root=state_root)
             state = api_state.beacon_state
-
+            print(f"retrieved state: {state.hash_tree_root().hex()}")
             temp_header = state.latest_block_header.copy()
             if temp_header.state_root == spec.Bytes32():
                 temp_header.state_root = state.hash_tree_root()
             block_root = spec.Root(temp_header.hash_tree_root())
+            print(f"last block of retrieved state: {block_root.hex()}")
 
             await self.cache_state(block_root, state)
             return state.copy()
@@ -66,7 +67,7 @@ class Eth2Monitor(object):
             print(f"cached: " + ', '.join(f"({b.hex()}, {s})" for b,s in self.state_by_block_slot_cache_dict.keys()))
             signed_block = await self.get_block(block_root)
             pre_state_root = signed_block.message.state_root
-            print(f"fetching state {pre_state_root.hex()}")
+            print(f"fetching state {pre_state_root.hex()} (from block: {signed_block.message.hash_tree_root().hex()})")
             state = await self.get_state_by_state_root(state_root=pre_state_root)
             if state.slot < slot:
                 spec.process_slots(state, slot)
@@ -287,9 +288,11 @@ class Eth2Monitor(object):
                     print(f"state transition/fetch error! slot {slot}, block: {signed_block.message.hash_tree_root().hex()}")
                     continue
                 print(f"completed processing filled slot {slot}")
+                prev_block_root = spec.Root(signed_block.message.hash_tree_root())
+                print(f"backfill: new prev block root: {prev_block_root.hex()}")
 
             slot += 1
-            print(f"new prev block root: {prev_block_root.hex()}")
+            print(f"backfill: new slot: {slot}")
 
             # Don't spam the serving side with requests too much, pause a little
             await trio.sleep(step_slowdown)
