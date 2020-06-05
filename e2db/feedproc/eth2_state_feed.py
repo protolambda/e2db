@@ -66,6 +66,7 @@ def store_state(session: Session, state: spec.BeaconState):
         slot=state.slot,
         eth1_data_root=eth1_data_root,
         fork=fork.current_version,
+        eth1_deposit_index=state.eth1_deposit_index,
         validators_root=state.validators.hash_tree_root(),
         balances=state.hash_tree_root(),
         total_slashings=spec.Gwei(sum(state.slashings.readonly_iter())),
