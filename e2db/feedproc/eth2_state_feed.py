@@ -316,8 +316,8 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
 
     result_indexed_atts: Set[spec.IndexedAttestation] = set()
     bits_to_indexed: Dict[spec.Root, spec.Root] = dict()
+
     def handle_indexed_att(indexed: spec.IndexedAttestation):
-        bits_to_indexed[attestation.hash_tree_root()] = indexed.hash_tree_root()
         result_indexed_atts.add(indexed)
 
     # Attester slashings
@@ -351,6 +351,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         data = attestation.data
         handle_att_data(data)
         indexed = spec.get_indexed_attestation(post_state, attestation)
+        bits_to_indexed[spec.Root(attestation.hash_tree_root())] = spec.Root(indexed.hash_tree_root())
         handle_indexed_att(indexed)
         result_pending_atts.append(indexed)
     if len(result_checkpoints) > 0:
