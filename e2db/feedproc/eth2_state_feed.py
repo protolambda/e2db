@@ -87,7 +87,8 @@ def store_state(session: Session, state: spec.BeaconState):
     ))
 
     header = state.latest_block_header.copy()
-    header.state_root = state_root
+    if header.state_root == spec.Bytes32():
+        header.state_root = state_root
     header_root = header.hash_tree_root()
     upsert(session, BeaconState(
         state_root=state_root,
