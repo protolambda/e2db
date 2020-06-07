@@ -24,15 +24,22 @@ from sqlalchemy.dialects import postgresql
 
 
 def upsert_all(session: Session, table: Type[Base], data: PyList[ExtendedBase]):
-    values = list(map(lambda x: x.to_dict(), data))
-    insert_stmt = postgresql.insert(table.__table__).values(values)
-    pk = insert_stmt.table.primary_key
-    update_columns = {col.name: col for col in insert_stmt.excluded if col.name not in pk}
-    update_stmt = insert_stmt.on_conflict_do_update(
-        index_elements=pk,
-        set_=update_columns,
-    )
-    session.execute(update_stmt)
+    if session.bind.dialect.name == "postgresql":
+        # Special postgres dialect upsert, to avoid talking to the database for every value individually
+        values = list(map(lambda x: x.to_dict(), data))
+        insert_stmt = postgresql.insert(table.__table__).values(values)
+        pk = insert_stmt.table.primary_key
+        update_columns = {col.name: col for col in insert_stmt.excluded if col.name not in pk}
+        update_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=pk,
+            set_=update_columns,
+        )
+        session.execute(update_stmt)
+    else:
+        # slower, but for sqlite it's fast anyway
+        table: ExtendedBase
+        # noinspection PyTypeChecker
+        table.upsert_all(session, data)
 
 
 def upsert(session: Session, inst: ExtendedBase):
