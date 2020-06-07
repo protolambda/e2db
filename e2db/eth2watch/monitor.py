@@ -103,6 +103,24 @@ class Eth2Monitor(object):
         self.state_by_block_slot_cache_dict[(block_root, state.slot)] = cached
         self.state_by_state_root_cache_dict[state.hash_tree_root()] = cached
 
+    async def _on_bad_transition(self, signed_block: spec.SignedBeaconBlock, state: spec.BeaconState):
+        block = signed_block.message
+        print(block)
+        print("\n\n----------------------\n\n")
+        print(state)
+        print("\n\n----------------------\n\n")
+        expected_api_state = await self.api.beacon.state(root=block.state_root)
+        expected_state = expected_api_state.beacon_state
+        for f_name in state.fields().keys():
+            a = getattr(state, f_name)
+            b = getattr(expected_state, f_name)
+            if a != b:
+                print(f"fields {f_name} differ!")
+                print(a)
+                print("~VS~")
+                print(b)
+                print("~~~~~")
+
     async def _fetch_state_and_process_block(self, signed_block: Optional[spec.SignedBeaconBlock], dest: trio.MemorySendChannel, is_canon: bool) -> bool:
         block = signed_block.message
         block_root = spec.Root(block.hash_tree_root())
@@ -126,10 +144,12 @@ class Eth2Monitor(object):
         except Exception as e:
             print(f"WARNING: {block_root.hex()} (slot {block.slot}) failed state transition: {e}")
             traceback.print_exc()
+            await self._on_bad_transition(signed_block, state)
             return False
         if block.state_root != state.hash_tree_root():
             print(f"WARNING: {block.hash_tree_root().hex()} (slot {block.slot}) state root ({block.state_root.hex()})"
                   f" does not match computed state root ({state.hash_tree_root().hex()})")
+            await self._on_bad_transition(signed_block, state)
             return False
         await self.cache_state(block_root, state, epc)
         await dest.send((pre_state, state.copy(), signed_block, is_canon))
@@ -262,7 +282,7 @@ class Eth2Monitor(object):
             last_hot_node_roots &= hot_roots
 
     async def backfill_cold_chain(self, from_slot: spec.Slot, to_slot: spec.Slot,
-                                  dest: trio.MemorySendChannel, step_slowdown: float = 0.5):
+                                  dest: trio.MemorySendChannel, step_slowdown: float = 0.0):
         genesis = False
         if from_slot == 0:
             genesis = True
@@ -310,8 +330,8 @@ class Eth2Monitor(object):
 
             slot += 1
             print(f"backfill: new slot: {slot}")
-
-            # Don't spam the serving side with requests too much, pause a little
-            await trio.sleep(step_slowdown)
+            if step_slowdown > 0.0:
+                # Don't spam the serving side with requests too much, pause a little
+                await trio.sleep(step_slowdown)
 
     # TODO: watch network, forkchoice, gossip, etc.
