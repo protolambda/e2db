@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, ForeignKey, LargeBinary, BigInteger, Boolean, String
+from sqlalchemy_mate import ExtendedBase
 from sqlalchemy.ext.declarative import declarative_base
 Base = declarative_base()
 
@@ -34,13 +35,13 @@ def format_epoch(epoch: int) -> int:
     return epoch
 
 
-class CanonEth1Block(Base):
+class CanonEth1Block(Base, ExtendedBase):
     __tablename__ = 'canon_eth1_block'
     block_num = Column(BlockNumber, primary_key=True)
     block_hash = Column(Eth1BlockHash)
 
 
-class Eth1Block(Base):
+class Eth1Block(Base, ExtendedBase):
     __tablename__ = 'eth1_block'
     block_hash = Column(Eth1BlockHash, primary_key=True)
     parent_hash = Column(Eth1BlockHash, nullable=True)
@@ -51,7 +52,7 @@ class Eth1Block(Base):
     deposit_count = Column(Integer)
 
 
-class Eth1Data(Base):
+class Eth1Data(Base, ExtendedBase):
     __tablename__ = 'eth1_data'
     data_root = Column(Root, primary_key=True)
     deposit_root = Column(Root)
@@ -59,7 +60,7 @@ class Eth1Data(Base):
     block_hash = Column(Eth1BlockHash)
 
 
-class Eth1BlockVote(Base):
+class Eth1BlockVote(Base, ExtendedBase):
     __tablename__ = 'eth1_block_vote'
     beacon_block_root = Column(Root, primary_key=True)
     slot = Column(Slot)
@@ -67,7 +68,7 @@ class Eth1BlockVote(Base):
     proposer_index = Column(ValidatorIndex)
 
 
-class DepositData(Base):
+class DepositData(Base, ExtendedBase):
     __tablename__ = 'deposit_data'
     data_root = Column(Root, primary_key=True)
     pubkey = Column(BLSPubkey)
@@ -76,7 +77,7 @@ class DepositData(Base):
     signature = Column(BLSSignature)
 
 
-class DepositTx(Base):
+class DepositTx(Base, ExtendedBase):
     __tablename__ = 'deposit_tx'
     block_hash = Column(Eth1BlockHash)
     block_num = Column(Integer)
@@ -85,7 +86,7 @@ class DepositTx(Base):
     data_root = Column(Root, ForeignKey('deposit_data.data_root'))
 
 
-class Validator(Base):
+class Validator(Base, ExtendedBase):
     __tablename__ = 'validator'
     # the root of the beacon block when the validator was created in the beacon state
     intro_block_root = Column(Root, primary_key=True)
@@ -95,7 +96,7 @@ class Validator(Base):
     withdrawal_credentials = Column(Bytes32)
 
 
-class ValidatorStatus(Base):
+class ValidatorStatus(Base, ExtendedBase):
     __tablename__ = 'validator_status'
     # Intro of the new status, not necessarily the validator itself being introduced, just the new status
     intro_block_root = Column(Root, primary_key=True)
@@ -109,7 +110,7 @@ class ValidatorStatus(Base):
     withdrawable_epoch = Column(Epoch)
 
 
-class ValidatorBalance(Base):
+class ValidatorBalance(Base, ExtendedBase):
     __tablename__ = 'validator_balance'
     intro_block_root = Column(Root, primary_key=True)
     intro_slot = Column(Slot)
@@ -117,7 +118,7 @@ class ValidatorBalance(Base):
     balance = Column(Gwei)
 
 
-class BeaconBlock(Base):
+class BeaconBlock(Base, ExtendedBase):
     __tablename__ = 'beacon_block'
     block_root = Column(Root, primary_key=True)
     slot = Column(Slot)
@@ -127,7 +128,7 @@ class BeaconBlock(Base):
     body_root = Column(Root)  # Not a foreign key, i.e. body may not exist if we just have header data.
 
 
-class BeaconBlockBody(Base):
+class BeaconBlockBody(Base, ExtendedBase):
     __tablename__ = 'beacon_block_body'
     body_root = Column(Root, primary_key=True)
     randao_reveal = Column(BLSSignature)
@@ -141,7 +142,7 @@ class BeaconBlockBody(Base):
     voluntary_exits_count = Column(Integer)
 
 
-class SignedBeaconBlock(Base):
+class SignedBeaconBlock(Base, ExtendedBase):
     __tablename__ = 'signed_beacon_block'
     # Root of the signed container (not the block root!)
     root = Column(Root, primary_key=True)
@@ -149,7 +150,7 @@ class SignedBeaconBlock(Base):
     block_root = Column(Root, ForeignKey('beacon_block.block_root'))
 
 
-class BeaconState(Base):
+class BeaconState(Base, ExtendedBase):
     __tablename__ = 'beacon_state'
     # Post state root, as referenced in the beacon block
     state_root = Column(Root, primary_key=True)
@@ -178,13 +179,13 @@ class BeaconState(Base):
     finalized_checkpoint = Column(Root, ForeignKey('checkpoint.checkpoint_root'))
 
 
-class CanonBeaconBlock(Base):
+class CanonBeaconBlock(Base, ExtendedBase):
     __tablename__ = 'canon_beacon_block'
     slot = Column(Slot, primary_key=True)
     block_root = Column(Root)
 
 
-class CanonBeaconState(Base):
+class CanonBeaconState(Base, ExtendedBase):
     __tablename__ = 'canon_beacon_state'
     slot = Column(Slot, primary_key=True)
     state_root = Column(Root)
@@ -193,27 +194,27 @@ class CanonBeaconState(Base):
     empty_slot = Column(Boolean)
 
 
-class Fork(Base):
+class Fork(Base, ExtendedBase):
     __tablename__ = 'beacon_fork'
     current_version = Column(Version, primary_key=True)
     previous_version = Column(Version)
     epoch = Column(Epoch)
 
 
-class ForkData(Base):
+class ForkData(Base, ExtendedBase):
     __tablename__ = 'beacon_fork_data'
     current_version = Column(Version, primary_key=True)
     genesis_validators_root = Column(Root, primary_key=True)
 
 
-class Checkpoint(Base):
+class Checkpoint(Base, ExtendedBase):
     __tablename__ = 'checkpoint'
     checkpoint_root = Column(Root, primary_key=True)
     epoch = Column(Epoch)
     block_root = Column(Root)
 
 
-class AttestationData(Base):
+class AttestationData(Base, ExtendedBase):
     __tablename__ = 'attestation_data'
     att_data_root = Column(Root, primary_key=True)
     slot = Column(Slot)
@@ -227,7 +228,7 @@ class AttestationData(Base):
 
 # TODO: improve how we represent participation in attestations
 
-class IndexedAttestation(Base):
+class IndexedAttestation(Base, ExtendedBase):
     __tablename__ = 'indexed_attestation'
     indexed_attestation_root = Column(Root, primary_key=True)
     attesting_indices = Column(String)  # List[ValidatorIndex, MAX_VALIDATORS_PER_COMMITTEE]
@@ -235,14 +236,14 @@ class IndexedAttestation(Base):
     signature = Column(BLSSignature)
 
 
-class BitsAttestation(Base):
+class BitsAttestation(Base, ExtendedBase):
     __tablename__ = 'bits_attestation'
     bits_attestation_root = Column(Root, primary_key=True)
     indexed_attestation_root = Column(Root)
 
 
 # PendingAttestation is essentially a "AttestationInclusion"
-class PendingAttestation(Base):
+class PendingAttestation(Base, ExtendedBase):
     __tablename__ = 'pending_attestation'
     intro_block_root = Column(Root, primary_key=True)
     intro_index = Column(Integer, primary_key=True)
@@ -251,35 +252,35 @@ class PendingAttestation(Base):
     proposer_index = Column(ValidatorIndex)
 
 
-class ProposerSlashing(Base):
+class ProposerSlashing(Base, ExtendedBase):
     __tablename__ = 'proposer_slashing'
     root = Column(Root, primary_key=True)
     signed_header_1 = Column(Root, ForeignKey('signed_beacon_block.root'))
     signed_header_2 = Column(Root, ForeignKey('signed_beacon_block.root'))
 
 
-class ProposerSlashingInclusion(Base):
+class ProposerSlashingInclusion(Base, ExtendedBase):
     __tablename__ = 'proposer_slashing_inclusion'
     intro_block_root = Column(Root, primary_key=True)
     intro_index = Column(Integer, primary_key=True)
     root = Column(Root, ForeignKey('proposer_slashing.root'))
 
 
-class AttesterSlashing(Base):
+class AttesterSlashing(Base, ExtendedBase):
     __tablename__ = 'attester_slashing'
     root = Column(Root, primary_key=True)
     attestation_1 = Column(Root, ForeignKey('indexed_attestation.indexed_attestation_root'))
     attestation_2 = Column(Root, ForeignKey('indexed_attestation.indexed_attestation_root'))
 
 
-class AttesterSlashingInclusion(Base):
+class AttesterSlashingInclusion(Base, ExtendedBase):
     __tablename__ = 'attester_slashing_inclusion'
     intro_block_root = Column(Root, primary_key=True)
     intro_index = Column(Integer, primary_key=True)
     root = Column(Root, ForeignKey('attester_slashing.root'))
 
 
-class Deposit(Base):
+class Deposit(Base, ExtendedBase):
     __tablename__ = 'deposit'
     root = Column(Root, primary_key=True)
     deposit_index = Column(DepositIndex)
@@ -288,14 +289,14 @@ class Deposit(Base):
     data = Column(Root, ForeignKey('deposit_data.data_root'))
 
 
-class DepositInclusion(Base):
+class DepositInclusion(Base, ExtendedBase):
     __tablename__ = 'deposit_inclusion'
     intro_block_root = Column(Root, primary_key=True)
     intro_index = Column(Integer, primary_key=True)
     root = Column(Root, ForeignKey('deposit.root'))
 
 
-class SignedVoluntaryExit(Base):
+class SignedVoluntaryExit(Base, ExtendedBase):
     __tablename__ = 'vol_exit'
     root = Column(Root, primary_key=True)
     epoch = Column(Epoch)  # Earliest epoch when voluntary exit can be processed
@@ -303,7 +304,7 @@ class SignedVoluntaryExit(Base):
     signature = Column(BLSSignature)
 
 
-class SignedVoluntaryExitInclusion(Base):
+class SignedVoluntaryExitInclusion(Base, ExtendedBase):
     __tablename__ = 'vol_exit_inclusion'
     intro_block_root = Column(Root, primary_key=True)
     intro_index = Column(Integer, primary_key=True)

@@ -32,6 +32,7 @@ setup(
         "web3>=5.7.0",
         "sqlalchemy>=1.3.16",
         "lru-dict==1.1.6",
+        "sqlalchemy_mate>=0.0.10",
     ],
     include_package_data=True,
     keywords=["eth2", "ethereum", "serenity", "beacon", "database", "index", "sql"],

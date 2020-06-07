@@ -1,4 +1,5 @@
 import trio
+from typing import Type, List as PyList
 from typing import Optional
 from itertools import zip_longest
 from e2db.models import (
@@ -14,22 +15,33 @@ from e2db.models import (
     CanonBeaconBlock, CanonBeaconState,
 )
 from eth2spec.phase0 import spec
+from sqlalchemy_mate import ExtendedBase
 
 from sqlalchemy.orm import Session
+
+
+def upsert(session: Session, inst: ExtendedBase):
+    # noinspection PyTypeChecker
+    inst.upsert_all(session, inst)
+
+
+def upsert_all(session: Session, table: Type[ExtendedBase], data: PyList[ExtendedBase]):
+    # noinspection PyTypeChecker
+    table.upsert_all(session, data)
 
 
 def store_state(session: Session, state: spec.BeaconState):
     state_root = state.hash_tree_root()
     eth1_data = state.eth1_data
     eth1_data_root = eth1_data.hash_tree_root()
-    session.merge(Eth1Data(
+    upsert(session, Eth1Data(
         data_root=eth1_data_root,
         deposit_root=eth1_data.deposit_root,
         deposit_count=eth1_data.deposit_count,
         block_hash=eth1_data.block_hash,
     ))
     fork = state.fork
-    session.merge(Fork(
+    upsert(session, Fork(
         current_version=fork.current_version,
         previous_version=fork.previous_version,
         epoch=fork.epoch,
@@ -37,21 +49,21 @@ def store_state(session: Session, state: spec.BeaconState):
 
     prev_just_ch = state.previous_justified_checkpoint
     prev_just_ch_root = prev_just_ch.hash_tree_root()
-    session.merge(Checkpoint(
+    upsert(session, Checkpoint(
         checkpoint_root=prev_just_ch_root,
         epoch=prev_just_ch.epoch,
         block_root=prev_just_ch.root,
     ))
     curr_just_ch = state.current_justified_checkpoint
     curr_just_ch_root = curr_just_ch.hash_tree_root()
-    session.merge(Checkpoint(
+    upsert(session, Checkpoint(
         checkpoint_root=curr_just_ch_root,
         epoch=curr_just_ch.epoch,
         block_root=curr_just_ch.root,
     ))
     finalized_ch = state.finalized_checkpoint
     finalized_ch_root = finalized_ch.hash_tree_root()
-    session.merge(Checkpoint(
+    upsert(session, Checkpoint(
         checkpoint_root=finalized_ch_root,
         epoch=finalized_ch.epoch,
         block_root=finalized_ch.root,
@@ -60,7 +72,7 @@ def store_state(session: Session, state: spec.BeaconState):
     header = state.latest_block_header.copy()
     header.state_root = state_root
     header_root = header.hash_tree_root()
-    session.merge(BeaconState(
+    upsert(session, BeaconState(
         state_root=state_root,
         latest_block_root=header_root,
         slot=state.slot,
@@ -85,9 +97,13 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
     block_root = header.hash_tree_root()
     slot = curr_state.slot
 
+    result_validators = []
+    result_validator_statuses = []
+    result_balances = []
     for i, (v, b) in enumerate(zip(curr_state.validators.readonly_iter(), curr_state.balances.readonly_iter())):
         # Create new validator
-        session.merge(Validator(
+        print(f"val cre {block_root.hex()} {i}")
+        result_validators.append(Validator(
             intro_block_root=block_root,
             validator_index=i,
             intro_slot=slot,
@@ -95,7 +111,7 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
             withdrawal_credentials=v.withdrawal_credentials,
         ))
         # Update validator status if it's a new or changed validator
-        session.merge(ValidatorStatus(
+        result_validator_statuses.append(ValidatorStatus(
             intro_block_root=block_root,
             validator_index=i,
             intro_slot=slot,
@@ -107,12 +123,18 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
             withdrawable_epoch=format_epoch(v.withdrawable_epoch),
         ))
         # And its balance
-        session.merge(ValidatorBalance(
+        result_balances.append(ValidatorBalance(
             intro_block_root=block_root,
             validator_index=i,
             intro_slot=slot,
             balance=b,
         ))
+    if len(result_validators) > 0:
+        upsert_all(session, Validator, result_validators)
+    if len(result_validator_statuses) > 0:
+        upsert_all(session, ValidatorStatus, result_validator_statuses)
+    if len(result_balances):
+        upsert_all(session, ValidatorBalance, result_balances)
 
 
 def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_state: spec.BeaconState):
@@ -125,14 +147,17 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
         prev: Optional[spec.Validator]
         curr: Optional[spec.Validator]
 
-        for i, (prev, curr) in enumerate(zip_longest(
-                prev_state.validators.readonly_iter(),
-                curr_state.validators.readonly_iter())):
-
+        # First put them in lists to avoid len() lookups reducing it to O(n^2) performance.
+        prev_vals = list(prev_state.validators.readonly_iter())
+        curr_vals = list(curr_state.validators.readonly_iter())
+        result_validators = []
+        result_validator_statuses = []
+        for i, (prev, curr) in enumerate(zip_longest(prev_vals, curr_vals)):
             assert curr is not None
             if prev is None:
+                print(f"val {block_root.hex()} {i}")
                 # Create new validator
-                session.merge(Validator(
+                result_validators.append(Validator(
                     intro_block_root=block_root,
                     validator_index=i,
                     intro_slot=slot,
@@ -141,7 +166,7 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                 ))
             if prev is None or prev != curr:
                 # Update validator status if it's a new or changed validator
-                session.merge(ValidatorStatus(
+                result_validator_statuses.append(ValidatorStatus(
                     intro_block_root=block_root,
                     validator_index=i,
                     intro_slot=slot,
@@ -152,20 +177,29 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                     exit_epoch=format_epoch(curr.exit_epoch),
                     withdrawable_epoch=format_epoch(curr.withdrawable_epoch),
                 ))
+        if len(result_validators) > 0:
+            upsert_all(session, Validator, result_validators)
+        if len(result_validator_statuses) > 0:
+            upsert_all(session, ValidatorStatus, result_validator_statuses)
 
     if prev_state.balances.hash_tree_root() != curr_state.balances.hash_tree_root():
         prev: Optional[spec.Gwei]
         curr: Optional[spec.Gwei]
 
-        for i, (prev, curr) in enumerate(zip_longest(prev_state.balances.readonly_iter(), curr_state.balances.readonly_iter())):
+        prev_bals = list(prev_state.balances.readonly_iter())
+        curr_bals = list(curr_state.balances.readonly_iter())
+        result_balances = []
+        for i, (prev, curr) in enumerate(zip_longest(prev_bals, curr_bals)):
             if prev is None or prev != curr:
                 # The balance may have changed
-                session.merge(ValidatorBalance(
+                result_balances.append(ValidatorBalance(
                     intro_block_root=block_root,
                     validator_index=i,
                     intro_slot=slot,
                     balance=curr,
                 ))
+        if len(result_balances):
+            upsert_all(session, ValidatorBalance, result_balances)
 
 
 def store_block(session: Session, post_state: spec.BeaconState, signed_block: spec.SignedBeaconBlock):
@@ -176,13 +210,13 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     # Eth1
     eth1_data = body.eth1_data
     eth1_data_root = eth1_data.hash_tree_root()
-    session.merge(Eth1Data(
+    upsert(session, Eth1Data(
         data_root=eth1_data_root,
         deposit_root=eth1_data.deposit_root,
         deposit_count=eth1_data.deposit_count,
         block_hash=eth1_data.block_hash,
     ))
-    session.merge(Eth1BlockVote(
+    upsert(session, Eth1BlockVote(
         beacon_block_root=block_root,
         slot=block.slot,
         eth1_data_root=eth1_data_root,
@@ -190,7 +224,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     ))
 
     def handle_header(block: spec.BeaconBlockHeader):
-        session.merge(BeaconBlock(
+        upsert(session, BeaconBlock(
             block_root=block.hash_tree_root(),
             slot=block.slot,
             proposer_index=block.proposer_index,
@@ -200,7 +234,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         ))
 
     def handle_signed_header(signed_block: spec.SignedBeaconBlockHeader):
-        session.merge(SignedBeaconBlock(
+        upsert(session, SignedBeaconBlock(
             root=signed_block.hash_tree_root(),
             signature=signed_block.signature,
             block_root=signed_block.message.hash_tree_root(),
@@ -213,12 +247,12 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         handle_header(proposer_slashing.signed_header_2.message)
         handle_signed_header(proposer_slashing.signed_header_1)
         handle_signed_header(proposer_slashing.signed_header_2)
-        session.merge(ProposerSlashing(
+        upsert(session, ProposerSlashing(
             root=proposer_slashing.hash_tree_root(),
             signed_header_1=proposer_slashing.signed_header_1.hash_tree_root(),
             signed_header_2=proposer_slashing.signed_header_2.hash_tree_root(),
         ))
-        session.merge(ProposerSlashingInclusion(
+        upsert(session, ProposerSlashingInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=proposer_slashing.hash_tree_root(),
@@ -227,20 +261,20 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     def handle_att_data(data: spec.AttestationData):
         source_ch = data.source
         source_ch_root = source_ch.hash_tree_root()
-        session.merge(Checkpoint(
+        upsert(session, Checkpoint(
             checkpoint_root=source_ch_root,
             epoch=source_ch.epoch,
             block_root=source_ch.root,
         ))
         target_ch = data.target
         target_ch_root = target_ch.hash_tree_root()
-        session.merge(Checkpoint(
+        upsert(session, Checkpoint(
             checkpoint_root=target_ch_root,
             epoch=target_ch.epoch,
             block_root=target_ch.root,
         ))
         data_root = data.hash_tree_root()
-        session.merge(AttestationData(
+        upsert(session, AttestationData(
             att_data_root=data_root,
             slot=data.slot,
             index=data.index,
@@ -250,7 +284,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         ))
 
     def handle_indexed_att(indexed: spec.IndexedAttestation):
-        session.merge(IndexedAttestation(
+        upsert(session, IndexedAttestation(
             indexed_attestation_root=indexed.hash_tree_root(),
             attesting_indices=', '.join(map(str, indexed.attesting_indices.readonly_iter())),
             data=indexed.data.hash_tree_root(),
@@ -264,12 +298,12 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
         handle_att_data(attester_slashing.attestation_2.data)
         handle_indexed_att(attester_slashing.attestation_1)
         handle_indexed_att(attester_slashing.attestation_2)
-        session.merge(AttesterSlashing(
+        upsert(session, AttesterSlashing(
             root=attester_slashing.hash_tree_root(),
             attestation_1=attester_slashing.attestation_1.hash_tree_root(),
             attestation_2=attester_slashing.attestation_2.hash_tree_root(),
         ))
-        session.merge(AttesterSlashingInclusion(
+        upsert(session, AttesterSlashingInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=attester_slashing.hash_tree_root(),
@@ -277,22 +311,28 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
 
     # Attestations
     attestation: spec.Attestation
+    result_att_bits = []
+    result_pending_atts = []
     for i, attestation in enumerate(body.attestations.readonly_iter()):
         data = attestation.data
         handle_att_data(data)
         indexed = spec.get_indexed_attestation(post_state, attestation)
         handle_indexed_att(indexed)
-        session.merge(BitsAttestation(
+        result_att_bits.append(BitsAttestation(
             bits_attestation_root=attestation.hash_tree_root(),
             indexed_attestation_root=indexed.hash_tree_root(),
         ))
-        session.merge(PendingAttestation(
+        result_pending_atts.append(PendingAttestation(
             intro_block_root=block_root,
             intro_index=i,
             indexed_att=indexed.hash_tree_root(),
             inclusion_delay=block.slot - data.slot,
             proposer_index=block.proposer_index,
         ))
+    if len(result_att_bits) > 0:
+        upsert_all(session, BitsAttestation, result_att_bits)
+    if len(result_pending_atts) > 0:
+        upsert_all(session, PendingAttestation, result_pending_atts)
 
     # Deposits
     deposit: spec.Deposit
@@ -300,20 +340,20 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     for i, deposit in enumerate(body.deposits.readonly_iter()):
         data = deposit.data
         dep_data_root = data.hash_tree_root()
-        session.merge(DepositData(
+        upsert(session, DepositData(
             data_root=dep_data_root,
             pubkey=data.pubkey,
             withdrawal_credentials=data.withdrawal_credentials,
             amount=data.amount,
             signature=data.signature,
         ))
-        session.merge(Deposit(
+        upsert(session, Deposit(
             root=deposit.hash_tree_root(),
             deposit_index=pre_dep_count + i,
             dep_tree_root=post_state.eth1_data.deposit_root,
             data=dep_data_root,
         ))
-        session.merge(DepositInclusion(
+        upsert(session, DepositInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=deposit.hash_tree_root(),
@@ -322,20 +362,20 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     # Voluntary Exits
     sig_vol_exit: spec.SignedVoluntaryExit
     for i, sig_vol_exit in enumerate(body.voluntary_exits.readonly_iter()):
-        session.merge(SignedVoluntaryExit(
+        upsert(session, SignedVoluntaryExit(
             root=sig_vol_exit.hash_tree_root(),
             epoch=sig_vol_exit.message.epoch,
             validator_index=sig_vol_exit.message.validator_index,
             signature=sig_vol_exit.signature,
         ))
-        session.merge(SignedVoluntaryExitInclusion(
+        upsert(session, SignedVoluntaryExitInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=sig_vol_exit.hash_tree_root(),
         ))
 
     # The body
-    session.merge(BeaconBlockBody(
+    upsert(session, BeaconBlockBody(
         body_root=body.hash_tree_root(),
         randao_reveal=body.randao_reveal,
         eth1_data_root=body.eth1_data.hash_tree_root(),
@@ -349,7 +389,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     ))
 
     # The block itself
-    session.merge(BeaconBlock(
+    upsert(session, BeaconBlock(
         block_root=block_root,
         slot=block.slot,
         proposer_index=block.proposer_index,
@@ -359,7 +399,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
     ))
 
     # Block signature
-    session.merge(SignedBeaconBlock(
+    upsert(session, SignedBeaconBlock(
         root=signed_block.hash_tree_root(),
         signature=signed_block.signature,
         block_root=block_root,
@@ -379,7 +419,7 @@ def store_canon_chain(session: Session, post: spec.BeaconState,
     if signed_block is not None:
         block = signed_block.message
         assert post.slot == block.slot
-        session.merge(CanonBeaconBlock(
+        upsert(session, CanonBeaconBlock(
             slot=block.slot,
             block_root=block.hash_tree_root(),
         ))
@@ -387,7 +427,7 @@ def store_canon_chain(session: Session, post: spec.BeaconState,
     else:
         proposer_index = calc_beacon_proposer_index(post, post.slot)
 
-    session.merge(CanonBeaconState(
+    upsert(session, CanonBeaconState(
         slot=post.slot,
         state_root=post.hash_tree_root(),
         proposer_index=proposer_index,
@@ -400,6 +440,10 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     state: spec.BeaconState
     block: Optional[spec.SignedBeaconBlock]
     async for (prev_state, post_state, block, is_canon) in recv:
+        if session.query(BeaconState).filter_by(state_root=post_state.hash_tree_root()).scalar() is not None:
+            print(f"state {post_state.hash_tree_root().hex()} (slot {post_state.slot})"
+                  f" already exists in DB, skipping storage")
+            continue
         if block is not None:
             print(f"storing block {block.hash_tree_root().hex()}")
             store_block(session, post_state, signed_block=block)
