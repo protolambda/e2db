@@ -3,7 +3,7 @@ from typing import Type, List as PyList, Set, Dict
 from typing import Optional
 from itertools import zip_longest
 from e2db.models import (
-    Fork, BeaconState, Validator, ValidatorStatus, ValidatorBalance,
+    Fork, BeaconState, Validator, ValidatorStatus, ValidatorEpochBalance, ValidatorOddBalance,
     BeaconBlockBody, BeaconBlock, SignedBeaconBlock,
     Eth1Data, Eth1BlockVote,
     ProposerSlashing, ProposerSlashingInclusion,
@@ -13,21 +13,31 @@ from e2db.models import (
     SignedVoluntaryExit, SignedVoluntaryExitInclusion,
     Checkpoint, format_epoch, BitsAttestation,
     CanonBeaconBlock, CanonBeaconState,
+    Base
 )
 from eth2spec.phase0 import spec
 from sqlalchemy_mate import ExtendedBase
 
 from sqlalchemy.orm import Session
 
+from sqlalchemy.dialects import postgresql
+
+
+def upsert_all(session: Session, table: Type[Base], data: PyList[ExtendedBase]):
+    values = list(map(lambda x: x.to_dict(), data))
+    insert_stmt = postgresql.insert(table.__table__).values(values)
+    pk = insert_stmt.table.primary_key
+    update_columns = {col.name: col for col in insert_stmt.excluded if col.name not in pk}
+    update_stmt = insert_stmt.on_conflict_do_update(
+        index_elements=pk,
+        set_=update_columns,
+    )
+    session.execute(update_stmt)
+
 
 def upsert(session: Session, inst: ExtendedBase):
     # noinspection PyTypeChecker
-    inst.upsert_all(session, inst)
-
-
-def upsert_all(session: Session, table: Type[ExtendedBase], data: PyList[ExtendedBase]):
-    # noinspection PyTypeChecker
-    table.upsert_all(session, data)
+    upsert_all(session, inst.__class__, [inst])
 
 
 def store_state(session: Session, state: spec.BeaconState):
@@ -91,7 +101,7 @@ def store_state(session: Session, state: spec.BeaconState):
     ))
 
 
-def store_validator_all(session: Session, curr_state: spec.BeaconState):
+def store_validator_all(session: Session, curr_state: spec.BeaconState, is_canon: bool):
     header = curr_state.latest_block_header.copy()
     header.state_root = curr_state.hash_tree_root()
     block_root = header.hash_tree_root()
@@ -100,6 +110,7 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
     result_validators = []
     result_validator_statuses = []
     result_balances = []
+    epoch = spec.compute_epoch_at_slot(slot)
     for i, (v, b) in enumerate(zip(curr_state.validators.readonly_iter(), curr_state.balances.readonly_iter())):
         # Create new validator
         print(f"val cre {block_root.hex()} {i}")
@@ -122,22 +133,23 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState):
             exit_epoch=format_epoch(v.exit_epoch),
             withdrawable_epoch=format_epoch(v.withdrawable_epoch),
         ))
-        # And its balance
-        result_balances.append(ValidatorBalance(
-            intro_block_root=block_root,
-            validator_index=i,
-            intro_slot=slot,
-            balance=b,
-        ))
+        # And its balance if canon and epoch
+        if is_canon:
+            result_balances.append(ValidatorEpochBalance(
+                epoch=epoch,
+                validator_index=i,
+                balance=b,
+                eff_balance=v.effective_balance,
+            ))
     if len(result_validators) > 0:
         upsert_all(session, Validator, result_validators)
     if len(result_validator_statuses) > 0:
         upsert_all(session, ValidatorStatus, result_validator_statuses)
     if len(result_balances):
-        upsert_all(session, ValidatorBalance, result_balances)
+        upsert_all(session, ValidatorEpochBalance, result_balances)
 
 
-def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_state: spec.BeaconState):
+def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_state: spec.BeaconState, is_canon: bool):
     header = curr_state.latest_block_header.copy()
     header.state_root = curr_state.hash_tree_root()
     block_root = header.hash_tree_root()
@@ -147,6 +159,8 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
         prev: Optional[spec.Validator]
         curr: Optional[spec.Validator]
 
+        print("checking validators diff")
+
         # First put them in lists to avoid len() lookups reducing it to O(n^2) performance.
         prev_vals = list(prev_state.validators.readonly_iter())
         curr_vals = list(curr_state.validators.readonly_iter())
@@ -155,7 +169,6 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
         for i, (prev, curr) in enumerate(zip_longest(prev_vals, curr_vals)):
             assert curr is not None
             if prev is None:
-                print(f"val {block_root.hex()} {i}")
                 # Create new validator
                 result_validators.append(Validator(
                     intro_block_root=block_root,
@@ -164,6 +177,7 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                     pubkey=curr.pubkey,
                     withdrawal_credentials=curr.withdrawal_credentials,
                 ))
+            print(f"val {block_root.hex()} {i}")
             if prev is None or prev != curr:
                 # Update validator status if it's a new or changed validator
                 result_validator_statuses.append(ValidatorStatus(
@@ -178,28 +192,46 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                     withdrawable_epoch=format_epoch(curr.withdrawable_epoch),
                 ))
         if len(result_validators) > 0:
+            print("Upserting validators")
             upsert_all(session, Validator, result_validators)
         if len(result_validator_statuses) > 0:
+            print("Upserting validator statuses")
             upsert_all(session, ValidatorStatus, result_validator_statuses)
 
-    if prev_state.balances.hash_tree_root() != curr_state.balances.hash_tree_root():
-        prev: Optional[spec.Gwei]
-        curr: Optional[spec.Gwei]
+    if is_canon:
+        if slot % spec.SLOTS_PER_EPOCH == 0:
+            epoch = spec.compute_epoch_at_slot(slot)
+            curr_bal: spec.Gwei
+            curr_val: spec.Validator
 
-        prev_bals = list(prev_state.balances.readonly_iter())
-        curr_bals = list(curr_state.balances.readonly_iter())
-        result_balances = []
-        for i, (prev, curr) in enumerate(zip_longest(prev_bals, curr_bals)):
-            if prev is None or prev != curr:
-                # The balance may have changed
-                result_balances.append(ValidatorBalance(
-                    intro_block_root=block_root,
+            print("checking epoch balances diff")
+            curr_bals = list(curr_state.balances.readonly_iter())
+            curr_vals = list(curr_state.validators.readonly_iter())
+            result_balances = []
+            for i, (curr_bal, curr_val) in enumerate(zip(curr_bals, curr_vals)):
+                result_balances.append(ValidatorEpochBalance(
+                    epoch=epoch,
                     validator_index=i,
-                    intro_slot=slot,
-                    balance=curr,
+                    balance=curr_bal,
+                    eff_balance=curr_val.effective_balance,
                 ))
-        if len(result_balances):
-            upsert_all(session, ValidatorBalance, result_balances)
+            upsert_all(session, ValidatorEpochBalance, result_balances)
+        elif prev_state.balances.hash_tree_root() != curr_state.balances.hash_tree_root():
+            prev_bals = list(prev_state.balances.readonly_iter())
+            curr_bals = list(curr_state.balances.readonly_iter())
+            result_balances = []
+            for i, (prev, curr) in enumerate(zip_longest(prev_bals, curr_bals)):
+                if prev is None or prev != curr:
+                    # Only track changes, and key by block-root, to be able to reorg without overwrite/deletes.
+                    result_balances.append(ValidatorOddBalance(
+                        intro_block_root=block_root,
+                        intro_slot=slot,
+                        validator_index=i,
+                        balance=curr,
+                    ))
+            if len(result_balances) > 0:
+                print("Upserting odd validator balances")
+                upsert_all(session, ValidatorOddBalance, result_balances)
 
 
 def store_block(session: Session, post_state: spec.BeaconState, signed_block: spec.SignedBeaconBlock):
@@ -332,16 +364,6 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
                 target=data.target.hash_tree_root(),
             ) for data in result_att_datas
         ])
-    if len(result_pending_atts) > 0:
-        upsert_all(session, PendingAttestation, [
-            PendingAttestation(
-                intro_block_root=block_root,
-                intro_index=i,
-                indexed_att=indexed.hash_tree_root(),
-                inclusion_delay=block.slot - indexed.data.slot,
-                proposer_index=block.proposer_index,
-            ) for i, indexed in enumerate(result_pending_atts)
-        ])
     if len(bits_to_indexed) > 0:
         upsert_all(session, BitsAttestation, [
             BitsAttestation(
@@ -357,6 +379,16 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
                 data=indexed.data.hash_tree_root(),
                 signature=indexed.signature,
             ) for indexed in result_indexed_atts
+        ])
+    if len(result_pending_atts) > 0:
+        upsert_all(session, PendingAttestation, [
+            PendingAttestation(
+                intro_block_root=block_root,
+                intro_index=i,
+                indexed_att=indexed.hash_tree_root(),
+                inclusion_delay=block.slot - indexed.data.slot,
+                proposer_index=block.proposer_index,
+            ) for i, indexed in enumerate(result_pending_atts)
         ])
 
     # Deposits
@@ -481,10 +513,6 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     state: spec.BeaconState
     block: Optional[spec.SignedBeaconBlock]
     async for (prev_state, post_state, block, is_canon) in recv:
-        if session.query(BeaconState).filter_by(state_root=post_state.hash_tree_root()).scalar() is not None:
-            print(f"state {post_state.hash_tree_root().hex()} (slot {post_state.slot})"
-                  f" already exists in DB, skipping storage")
-            continue
         if block is not None:
             print(f"storing block {block.hash_tree_root().hex()}")
             store_block(session, post_state, signed_block=block)
@@ -492,11 +520,11 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
         store_state(session, post_state)
         if prev_state is None:
             print(f"storing full validator set of post-state {post_state.hash_tree_root().hex()}")
-            store_validator_all(session, post_state)
+            store_validator_all(session, post_state, is_canon)
         else:
             print(f"storing validator diff between pre {prev_state.hash_tree_root().hex()}"
                   f" and post {post_state.hash_tree_root().hex()}")
-            store_validator_diff(session, prev_state, post_state)
+            store_validator_diff(session, prev_state, post_state, is_canon)
         if is_canon:
             print(f"storing canonical ref to post-state {post_state.hash_tree_root().hex()}")
             store_canon_chain(session, post_state, block)

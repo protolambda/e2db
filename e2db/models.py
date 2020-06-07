@@ -110,8 +110,20 @@ class ValidatorStatus(Base, ExtendedBase):
     withdrawable_epoch = Column(Epoch)
 
 
-class ValidatorBalance(Base, ExtendedBase):
-    __tablename__ = 'validator_balance'
+# Only tracked for the canonical state (and updated on reorgs)
+class ValidatorEpochBalance(Base, ExtendedBase):
+    __tablename__ = 'validator_epoch_balance'
+    # describes the epoch for which the balance will be valid.
+    # I.e. first 32 slots = 0, based on genesis balance. Second 32 slots based on first epoch transition, etc.
+    epoch = Column(Epoch, primary_key=True)
+    validator_index = Column(ValidatorIndex, primary_key=True)
+    balance = Column(Gwei)
+    eff_balance = Column(Gwei)
+
+
+# When the validator balance changes at a non-epoch moment
+class ValidatorOddBalance(Base, ExtendedBase):
+    __tablename__ = 'validator_odd_balance'
     intro_block_root = Column(Root, primary_key=True)
     intro_slot = Column(Slot)
     validator_index = Column(ValidatorIndex, primary_key=True)
