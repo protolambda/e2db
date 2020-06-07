@@ -1,5 +1,5 @@
 import trio
-from typing import Type, List as PyList
+from typing import Type, List as PyList, Set, Dict
 from typing import Optional
 from itertools import zip_longest
 from e2db.models import (
@@ -240,139 +240,180 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
             block_root=signed_block.message.hash_tree_root(),
         ))
 
+    # Ugly but effective: collect operations, ensuring they are unique first, and then upsert as batch.
+
     # Proposer slashings
     proposer_slashing: spec.ProposerSlashing
+    result_prop_slashing = []
+    result_prop_slashing_inc = []
     for i, proposer_slashing in enumerate(body.proposer_slashings.readonly_iter()):
         handle_header(proposer_slashing.signed_header_1.message)
         handle_header(proposer_slashing.signed_header_2.message)
         handle_signed_header(proposer_slashing.signed_header_1)
         handle_signed_header(proposer_slashing.signed_header_2)
-        upsert(session, ProposerSlashing(
+        result_prop_slashing.append(ProposerSlashing(
             root=proposer_slashing.hash_tree_root(),
             signed_header_1=proposer_slashing.signed_header_1.hash_tree_root(),
             signed_header_2=proposer_slashing.signed_header_2.hash_tree_root(),
         ))
-        upsert(session, ProposerSlashingInclusion(
+        result_prop_slashing_inc.append(ProposerSlashingInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=proposer_slashing.hash_tree_root(),
         ))
+    if len(result_prop_slashing) > 0:
+        upsert_all(session, ProposerSlashing, result_prop_slashing)
+    if len(result_prop_slashing_inc) > 0:
+        upsert_all(session, ProposerSlashingInclusion, result_prop_slashing_inc)
+
+    result_checkpoints: Set[spec.Checkpoint] = set()
+    result_att_datas: Set[spec.AttestationData] = set()
 
     def handle_att_data(data: spec.AttestationData):
-        source_ch = data.source
-        source_ch_root = source_ch.hash_tree_root()
-        upsert(session, Checkpoint(
-            checkpoint_root=source_ch_root,
-            epoch=source_ch.epoch,
-            block_root=source_ch.root,
-        ))
-        target_ch = data.target
-        target_ch_root = target_ch.hash_tree_root()
-        upsert(session, Checkpoint(
-            checkpoint_root=target_ch_root,
-            epoch=target_ch.epoch,
-            block_root=target_ch.root,
-        ))
-        data_root = data.hash_tree_root()
-        upsert(session, AttestationData(
-            att_data_root=data_root,
-            slot=data.slot,
-            index=data.index,
-            beacon_block_root=data.beacon_block_root,
-            source=source_ch_root,
-            target=target_ch_root,
-        ))
+        result_checkpoints.add(data.source)
+        result_checkpoints.add(data.target)
+        result_att_datas.add(data)
 
+    result_indexed_atts: Set[spec.IndexedAttestation] = set()
+    bits_to_indexed: Dict[spec.Root, spec.Root] = dict()
     def handle_indexed_att(indexed: spec.IndexedAttestation):
-        upsert(session, IndexedAttestation(
-            indexed_attestation_root=indexed.hash_tree_root(),
-            attesting_indices=', '.join(map(str, indexed.attesting_indices.readonly_iter())),
-            data=indexed.data.hash_tree_root(),
-            signature=indexed.signature,
-        ))
+        bits_to_indexed[attestation.hash_tree_root()] = indexed.hash_tree_root()
+        result_indexed_atts.add(indexed)
 
     # Attester slashings
     attester_slashing: spec.AttesterSlashing
+    result_att_slashing = []
+    result_att_slashing_inc = []
     for i, attester_slashing in enumerate(body.attester_slashings.readonly_iter()):
         handle_att_data(attester_slashing.attestation_1.data)
         handle_att_data(attester_slashing.attestation_2.data)
         handle_indexed_att(attester_slashing.attestation_1)
         handle_indexed_att(attester_slashing.attestation_2)
-        upsert(session, AttesterSlashing(
+        result_att_slashing.append(AttesterSlashing(
             root=attester_slashing.hash_tree_root(),
             attestation_1=attester_slashing.attestation_1.hash_tree_root(),
             attestation_2=attester_slashing.attestation_2.hash_tree_root(),
         ))
-        upsert(session, AttesterSlashingInclusion(
+        result_att_slashing_inc.append(AttesterSlashingInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=attester_slashing.hash_tree_root(),
         ))
+    if len(result_att_slashing) > 0:
+        upsert_all(session, AttesterSlashing, result_att_slashing)
+    if len(result_att_slashing_inc) > 0:
+        upsert_all(session, AttesterSlashingInclusion, result_att_slashing_inc)
 
     # Attestations
     attestation: spec.Attestation
-    result_att_bits = []
-    result_pending_atts = []
+    result_pending_atts: PyList[spec.IndexedAttestation] = []
     for i, attestation in enumerate(body.attestations.readonly_iter()):
         data = attestation.data
         handle_att_data(data)
         indexed = spec.get_indexed_attestation(post_state, attestation)
         handle_indexed_att(indexed)
-        result_att_bits.append(BitsAttestation(
-            bits_attestation_root=attestation.hash_tree_root(),
-            indexed_attestation_root=indexed.hash_tree_root(),
-        ))
-        result_pending_atts.append(PendingAttestation(
-            intro_block_root=block_root,
-            intro_index=i,
-            indexed_att=indexed.hash_tree_root(),
-            inclusion_delay=block.slot - data.slot,
-            proposer_index=block.proposer_index,
-        ))
-    if len(result_att_bits) > 0:
-        upsert_all(session, BitsAttestation, result_att_bits)
+        result_pending_atts.append(indexed)
+    if len(result_checkpoints) > 0:
+        upsert_all(session, Checkpoint, [
+            Checkpoint(
+                checkpoint_root=ch.hash_tree_root(),
+                epoch=ch.epoch,
+                block_root=ch.root,
+            ) for ch in result_checkpoints
+        ])
+    if len(result_att_datas) > 0:
+        upsert_all(session, AttestationData, [
+            AttestationData(
+                att_data_root=data.hash_tree_root(),
+                slot=data.slot,
+                index=data.index,
+                beacon_block_root=data.beacon_block_root,
+                source=data.source.hash_tree_root(),
+                target=data.target.hash_tree_root(),
+            ) for data in result_att_datas
+        ])
     if len(result_pending_atts) > 0:
-        upsert_all(session, PendingAttestation, result_pending_atts)
+        upsert_all(session, PendingAttestation, [
+            PendingAttestation(
+                intro_block_root=block_root,
+                intro_index=i,
+                indexed_att=indexed.hash_tree_root(),
+                inclusion_delay=block.slot - indexed.data.slot,
+                proposer_index=block.proposer_index,
+            ) for i, indexed in enumerate(result_pending_atts)
+        ])
+    if len(bits_to_indexed) > 0:
+        upsert_all(session, BitsAttestation, [
+            BitsAttestation(
+                bits_attestation_root=attestation_root,
+                indexed_attestation_root=indexed_root,
+            ) for attestation_root, indexed_root in bits_to_indexed.items()
+        ])
+    if len(result_indexed_atts) > 0:
+        upsert_all(session, IndexedAttestation, [
+            IndexedAttestation(
+                indexed_attestation_root=indexed.hash_tree_root(),
+                attesting_indices=', '.join(map(str, indexed.attesting_indices.readonly_iter())),
+                data=indexed.data.hash_tree_root(),
+                signature=indexed.signature,
+            ) for indexed in result_indexed_atts
+        ])
 
     # Deposits
     deposit: spec.Deposit
     pre_dep_count = post_state.eth1_deposit_index - len(body.deposits)
+    result_dep_datas: Set[spec.DepositData] = set()
+    result_deps: PyList[Deposit] = []
+    result_dep_incl: PyList[DepositInclusion] = []
     for i, deposit in enumerate(body.deposits.readonly_iter()):
         data = deposit.data
         dep_data_root = data.hash_tree_root()
-        upsert(session, DepositData(
-            data_root=dep_data_root,
-            pubkey=data.pubkey,
-            withdrawal_credentials=data.withdrawal_credentials,
-            amount=data.amount,
-            signature=data.signature,
-        ))
-        upsert(session, Deposit(
+        result_dep_datas.add(data)
+        result_deps.append(Deposit(
             root=deposit.hash_tree_root(),
             deposit_index=pre_dep_count + i,
             dep_tree_root=post_state.eth1_data.deposit_root,
             data=dep_data_root,
         ))
-        upsert(session, DepositInclusion(
+        result_dep_incl.append(DepositInclusion(
             intro_block_root=block_root,
             intro_index=i,
             root=deposit.hash_tree_root(),
         ))
+    if len(result_dep_datas) > 0:
+        upsert_all(session, DepositData, [
+            DepositData(
+                data_root=data.hash_tree_root(),
+                pubkey=data.pubkey,
+                withdrawal_credentials=data.withdrawal_credentials,
+                amount=data.amount,
+                signature=data.signature,
+            ) for data in result_dep_datas
+        ])
+    if len(result_deps) > 0:
+        upsert_all(session, Deposit, result_deps)
+    if len(result_dep_incl) > 0:
+        upsert_all(session, DepositInclusion, result_dep_incl)
 
     # Voluntary Exits
     sig_vol_exit: spec.SignedVoluntaryExit
-    for i, sig_vol_exit in enumerate(body.voluntary_exits.readonly_iter()):
-        upsert(session, SignedVoluntaryExit(
-            root=sig_vol_exit.hash_tree_root(),
-            epoch=sig_vol_exit.message.epoch,
-            validator_index=sig_vol_exit.message.validator_index,
-            signature=sig_vol_exit.signature,
-        ))
-        upsert(session, SignedVoluntaryExitInclusion(
-            intro_block_root=block_root,
-            intro_index=i,
-            root=sig_vol_exit.hash_tree_root(),
-        ))
+    vol_exits = list(body.voluntary_exits.readonly_iter())
+    if len(vol_exits) > 0:
+        upsert_all(session, SignedVoluntaryExit, [
+            SignedVoluntaryExit(
+                root=sig_vol_exit.hash_tree_root(),
+                epoch=sig_vol_exit.message.epoch,
+                validator_index=sig_vol_exit.message.validator_index,
+                signature=sig_vol_exit.signature,
+            ) for sig_vol_exit in vol_exits
+        ])
+        upsert_all(session, SignedVoluntaryExitInclusion, [
+            SignedVoluntaryExitInclusion(
+                intro_block_root=block_root,
+                intro_index=i,
+                root=sig_vol_exit.hash_tree_root(),
+            ) for i, sig_vol_exit in enumerate(vol_exits)
+        ])
 
     # The body
     upsert(session, BeaconBlockBody(
