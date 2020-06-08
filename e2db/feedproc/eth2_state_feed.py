@@ -271,7 +271,7 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
             proposer_index=block.proposer_index,
             parent_root=block.parent_root,
             state_root=block.state_root,
-            body_root=block.body.hash_tree_root(),
+            body_root=block.body_root,
         ))
 
     def handle_signed_header(signed_block: spec.SignedBeaconBlockHeader):
