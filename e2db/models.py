@@ -206,6 +206,39 @@ class CanonBeaconState(Base, ExtendedBase):
     empty_slot = Column(Boolean)
 
 
+class CanonBeaconEpoch(Base, ExtendedBase):
+    __tablename__ = 'canon_beacon_epoch'
+    # Of the post-state after the epoch transition, i.e. the starting point of below epoch
+    state_root = Column(Root, primary_key=True)
+    epoch = Column(Epoch)  # Of the post-state, i.e. post state slot 31 -> epoch 0, slot 32 -> epoch 1
+
+
+class StakingStats(Base, ExtendedBase):
+    __tablename__ = 'staking_stats'
+    state_root = Column(Root, primary_key=True)  # Of the post-state after the epoch transition
+    slot = Column(Slot)  # Of the post state after epoch transition. I.e. 32 for epoch 0
+
+    total_active_stake = Column(Gwei)
+
+    # Of unslashed attesters, as used in the rewards calculation
+    prev_unslashed_source_stake = Column(Gwei)
+    prev_unslashed_target_stake = Column(Gwei)
+    prev_unslashed_head_stake = Column(Gwei)
+
+    # Of unslashed attesters, similar to what is used in the rewards calculation,
+    # but a look into the live ongoing stake stats for next epoch of rewards/penalties.
+    curr_unslashed_source_stake = Column(Gwei)
+    curr_unslashed_target_stake = Column(Gwei)
+    curr_unslashed_head_stake = Column(Gwei)
+
+    # Of all attesters, as used in the justification/finality calculation
+    prev_epoch_target_stake = Column(Gwei)
+    curr_epoch_target_stake = Column(Gwei)
+
+    # Number of active validators
+    active_validators = Column(Integer)
+
+
 class Fork(Base, ExtendedBase):
     __tablename__ = 'beacon_fork'
     current_version = Column(Version, primary_key=True)

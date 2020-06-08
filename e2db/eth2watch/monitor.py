@@ -133,7 +133,7 @@ class Eth2Monitor(object):
             return False
         state = pre_state_cached.state
         pre_state = state.copy()
-        epc = pre_state_cached.epc
+        epc = pre_state_cached.epc.copy()
 
         print(f"processing state transition of block {block_root} (slot {block.slot}) "
               f"on state {state.hash_tree_root().hex()} (slot {state.slot}) "
@@ -152,7 +152,7 @@ class Eth2Monitor(object):
             await self._on_bad_transition(signed_block, state)
             return False
         await self.cache_state(block_root, state, epc)
-        await dest.send((pre_state, state.copy(), signed_block, is_canon))
+        await dest.send((pre_state, state.copy(), signed_block, pre_state_cached.epc, epc, is_canon))
         return True
 
     async def _fetch_state_empty_slots(self, epc: eth2fastspec.EpochsContext, state: spec.BeaconState,
@@ -165,12 +165,13 @@ class Eth2Monitor(object):
         canon_to_slot = start_slot + deltas_canon
         for slot in range(start_slot, to_slot):
             pre_state = state.copy()
+            pre_epc = epc.copy()
             print(f"processing state transition of empty slot {slot} on pre-state {pre_state.hash_tree_root().hex()})")
             eth2fastspec.process_slots(epc, state, spec.Slot(slot))
             block_root = spec.Root(state.latest_block_header.hash_tree_root())
             await self.cache_state(block_root, state, epc)
             is_canon = slot < canon_to_slot
-            await dest.send((pre_state, state.copy(), None, is_canon))
+            await dest.send((pre_state, state.copy(), None, pre_epc, epc, is_canon))
         return state
 
     async def watch_hot_chain(self, dest: trio.MemorySendChannel, poll_interval: float = 2.0):
@@ -294,7 +295,7 @@ class Eth2Monitor(object):
             epc = eth2fastspec.EpochsContext()
             epc.load_state(api_state.beacon_state)
             await self.cache_state(api_block.root, api_state.beacon_state, epc)
-            await dest.send((None, api_state.beacon_state, None, True))
+            await dest.send((None, api_state.beacon_state, None, epc, epc, True))
         prev_block_root = api_block.root
         print(f"starting block root: {prev_block_root}")
         slot = from_slot

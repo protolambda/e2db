@@ -12,10 +12,13 @@ from e2db.models import (
     DepositData, Deposit, DepositInclusion,
     SignedVoluntaryExit, SignedVoluntaryExitInclusion,
     Checkpoint, format_epoch, BitsAttestation,
-    CanonBeaconBlock, CanonBeaconState,
+    CanonBeaconBlock, CanonBeaconState, CanonBeaconEpoch,
+    StakingStats,
     Base
 )
 from eth2spec.phase0 import spec
+import eth2fastspec
+
 from sqlalchemy_mate import ExtendedBase
 
 from sqlalchemy.orm import Session
@@ -122,7 +125,6 @@ def store_validator_all(session: Session, curr_state: spec.BeaconState, is_canon
     epoch = spec.compute_epoch_at_slot(slot)
     for i, (v, b) in enumerate(zip(curr_state.validators.readonly_iter(), curr_state.balances.readonly_iter())):
         # Create new validator
-        print(f"val cre {block_root.hex()} {i}")
         result_validators.append(Validator(
             intro_block_root=block_root,
             validator_index=i,
@@ -186,7 +188,6 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
                     pubkey=curr.pubkey,
                     withdrawal_credentials=curr.withdrawal_credentials,
                 ))
-            print(f"val {block_root.hex()} {i}")
             if prev is None or prev != curr:
                 # Update validator status if it's a new or changed validator
                 result_validator_statuses.append(ValidatorStatus(
@@ -241,6 +242,38 @@ def store_validator_diff(session: Session, prev_state: spec.BeaconState, curr_st
             if len(result_balances) > 0:
                 print("Upserting odd validator balances")
                 upsert_all(session, ValidatorOddBalance, result_balances)
+
+
+def store_staking_stats(session: Session, post_state: spec.BeaconState, post_epc: eth2fastspec.EpochsContext):
+    # Calculate the staking data as if it were an epoch process pre-computation
+    epoch_process = eth2fastspec.prepare_epoch_process_state(post_epc, post_state)
+
+    # Compute the live stake stats from the epoch process statuses.
+    # The prev epoch was already computed (since it's used for the rewards/penalties part of the transition),
+    # but we want live stats as well.
+    curr_source_unsl_stake, curr_target_unsl_stake, curr_head_unsl_stake = 0, 0, 0
+    for status in epoch_process.statuses:
+        if eth2fastspec.has_markers(status.flags, eth2fastspec.FLAG_PREV_SOURCE_ATTESTER | eth2fastspec.FLAG_UNSLASHED):
+            curr_source_unsl_stake += status.validator.effective_balance
+            if eth2fastspec.has_markers(status.flags, eth2fastspec.FLAG_PREV_TARGET_ATTESTER):
+                curr_target_unsl_stake += status.validator.effective_balance
+                if eth2fastspec.has_markers(status.flags, eth2fastspec.FLAG_PREV_HEAD_ATTESTER):
+                    curr_head_unsl_stake += status.validator.effective_balance
+
+    upsert(session, StakingStats(
+        state_root=post_state.hash_tree_root(),
+        slot=post_state.slot,
+        total_active_stake=epoch_process.total_active_stake,
+        prev_unslashed_source_stake=epoch_process.prev_epoch_unslashed_stake.source_stake,
+        prev_unslashed_target_stake=epoch_process.prev_epoch_unslashed_stake.target_stake,
+        prev_unslashed_head_stake=epoch_process.prev_epoch_unslashed_stake.head_stake,
+        curr_unslashed_source_stake=curr_source_unsl_stake,
+        curr_unslashed_target_stake=curr_target_unsl_stake,
+        curr_unslashed_head_stake=curr_head_unsl_stake,
+        prev_epoch_target_stake=epoch_process.prev_epoch_target_stake,
+        curr_epoch_target_stake=epoch_process.curr_epoch_target_stake,
+        active_validators=epoch_process.active_validators,
+    ))
 
 
 def store_block(session: Session, post_state: spec.BeaconState, signed_block: spec.SignedBeaconBlock):
@@ -519,12 +552,19 @@ def store_canon_chain(session: Session, post: spec.BeaconState,
         empty_slot=(signed_block is None)
     ))
 
+    if post.slot % spec.SLOTS_PER_EPOCH == 0:
+        upsert(session, CanonBeaconEpoch(
+            state_root=post.hash_tree_root(),
+            epoch=spec.compute_epoch_at_slot(post.slot),
+        ))
+
 
 async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     prev_state: spec.BeaconState
     state: spec.BeaconState
     block: Optional[spec.SignedBeaconBlock]
-    async for (prev_state, post_state, block, is_canon) in recv:
+    epoch_process: Optional[eth2fastspec.EpochProcess]
+    async for (prev_state, post_state, block, prev_epc, post_epc, is_canon) in recv:
         try:
             if block is not None:
                 print(f"storing block {block.hash_tree_root().hex()}")
@@ -541,6 +581,8 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
             if is_canon:
                 print(f"storing canonical ref to post-state {post_state.hash_tree_root().hex()}")
                 store_canon_chain(session, post_state, block)
+            print(f"storing staking stats for state {post_state.hash_tree_root().hex()}")
+            store_staking_stats(session, post_state, post_epc)
             session.commit()
         except Exception as e:
             print(f"Error: Failed to store state! {post_state.hash_tree_root().hex()}: {e}")
