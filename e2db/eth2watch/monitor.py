@@ -81,8 +81,8 @@ class Eth2Monitor(object):
             cached_state = await self.get_state_by_state_root(state_root=pre_state_root)
             if cached_state.state.slot < slot:
                 eth2fastspec.process_slots(cached_state.epc, cached_state.state, slot)
-            print(f"computed state {cached_state.state.hash_tree_root().hex()}")
-            await self.cache_state(block_root, cached_state.state, cached_state.epc)
+                print(f"computed state {cached_state.state.hash_tree_root().hex()}")
+                await self.cache_state(block_root, cached_state.state, cached_state.epc)
             return cached_state
 
         out: CachedState = self.state_by_block_slot_cache_dict[key]
@@ -244,6 +244,10 @@ class Eth2Monitor(object):
                               f"state root {block.state_root.hex()}, parent root: {block.parent_root.hex()}) "
                               f"for node block {node.root.hex()}")
                     except Exception as e:
+                        # If the block is really just not there anymore, then skip it.
+                        if 'Unable to find SignedBeaconBlock for root' in str(e):
+                            processed_node_roots.add(node.root)
+                            continue
                         print(f"Failed to fetch block for by root {node.root.hex()}: {e}")
                         await trio.sleep(poll_interval)
                         continue
