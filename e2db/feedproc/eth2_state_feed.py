@@ -21,6 +21,7 @@ from sqlalchemy_mate import ExtendedBase
 from sqlalchemy.orm import Session
 
 from sqlalchemy.dialects import postgresql
+import traceback
 
 
 def upsert_all(session: Session, table: Type[Base], data: PyList[ExtendedBase]):
@@ -339,10 +340,6 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
             intro_index=i,
             root=attester_slashing.hash_tree_root(),
         ))
-    if len(result_att_slashing) > 0:
-        upsert_all(session, AttesterSlashing, result_att_slashing)
-    if len(result_att_slashing_inc) > 0:
-        upsert_all(session, AttesterSlashingInclusion, result_att_slashing_inc)
 
     # Attestations
     attestation: spec.Attestation
@@ -399,6 +396,12 @@ def store_block(session: Session, post_state: spec.BeaconState, signed_block: sp
                 proposer_index=block.proposer_index,
             ) for i, indexed in enumerate(result_pending_atts)
         ])
+
+    # After inserting the attestations, do the attester slashings (attestations may be foreign key)
+    if len(result_att_slashing) > 0:
+        upsert_all(session, AttesterSlashing, result_att_slashing)
+    if len(result_att_slashing_inc) > 0:
+        upsert_all(session, AttesterSlashingInclusion, result_att_slashing_inc)
 
     # Deposits
     deposit: spec.Deposit
@@ -522,19 +525,23 @@ async def ev_eth2_state_loop(session: Session, recv: trio.MemoryReceiveChannel):
     state: spec.BeaconState
     block: Optional[spec.SignedBeaconBlock]
     async for (prev_state, post_state, block, is_canon) in recv:
-        if block is not None:
-            print(f"storing block {block.hash_tree_root().hex()}")
-            store_block(session, post_state, signed_block=block)
-        print(f"storing post-state {post_state.hash_tree_root().hex()}")
-        store_state(session, post_state)
-        if prev_state is None:
-            print(f"storing full validator set of post-state {post_state.hash_tree_root().hex()}")
-            store_validator_all(session, post_state, is_canon)
-        else:
-            print(f"storing validator diff between pre {prev_state.hash_tree_root().hex()}"
-                  f" and post {post_state.hash_tree_root().hex()}")
-            store_validator_diff(session, prev_state, post_state, is_canon)
-        if is_canon:
-            print(f"storing canonical ref to post-state {post_state.hash_tree_root().hex()}")
-            store_canon_chain(session, post_state, block)
-        session.commit()
+        try:
+            if block is not None:
+                print(f"storing block {block.hash_tree_root().hex()}")
+                store_block(session, post_state, signed_block=block)
+            print(f"storing post-state {post_state.hash_tree_root().hex()}")
+            store_state(session, post_state)
+            if prev_state is None:
+                print(f"storing full validator set of post-state {post_state.hash_tree_root().hex()}")
+                store_validator_all(session, post_state, is_canon)
+            else:
+                print(f"storing validator diff between pre {prev_state.hash_tree_root().hex()}"
+                      f" and post {post_state.hash_tree_root().hex()}")
+                store_validator_diff(session, prev_state, post_state, is_canon)
+            if is_canon:
+                print(f"storing canonical ref to post-state {post_state.hash_tree_root().hex()}")
+                store_canon_chain(session, post_state, block)
+            session.commit()
+        except Exception as e:
+            print(f"Error: Failed to store state! {post_state.hash_tree_root().hex()}: {e}")
+            traceback.print_exc()
