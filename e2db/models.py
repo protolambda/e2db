@@ -96,6 +96,23 @@ class Validator(Base, ExtendedBase):
     withdrawal_credentials = Column(Bytes32)
 
 
+# TODO: track canonical validator stats, to simplify queries ?
+#
+# class Validator(Base, ExtendedBase):
+#     __tablename__ = 'validator'
+#     validator_index = Column(ValidatorIndex, primary_key=True)
+#     pubkey = Column(BLSPubkey)
+#     withdrawal_credentials = Column(Bytes32)
+#
+#
+# class CanonValidatorStats(Base, ExtendedBase):
+#     __tablename__ = 'canon_validator'
+#     slot = Column(Slot, primary_key=True)
+#     validator_index = Column(ValidatorIndex, primary_key=True)
+#     status = Column(String)
+
+
+
 class ValidatorStatus(Base, ExtendedBase):
     __tablename__ = 'validator_status'
     # Intro of the new status, not necessarily the validator itself being introduced, just the new status
