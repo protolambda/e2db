@@ -26,6 +26,8 @@ docker run -d --name e2db protolambda/e2db python -u run_eth2_feeds.py --watch -
  --db-addr=longconnectionstring
 ```
 
+For testing you can leave out the `--db-addr`, and it will write to a local SQLite DB called `testing.db`
+
 ## Features
 
 - Extensive indexing of Eth2 state for testnet analytics (including watching hot-chain/forked-data)
